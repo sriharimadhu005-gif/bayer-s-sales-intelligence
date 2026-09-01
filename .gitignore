@@ -1,0 +1,27 @@
+# Environment files & Secrets
+.env
+.env.local
+.env.development
+.env.production
+*.env
+
+# Python / Virtualenv
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+ENV/
+
+# Node / Frontend dependencies & build outputs
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Working / Temporary files
+tmp/
+*.log
+.DS_Store
+Thumbs.db

@@ -14,16 +14,19 @@ import re
 from datetime import datetime
 from urllib.parse import quote
 
-from fastapi import FastAPI, Query, Response
+from fastapi import FastAPI, Path, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from .db import query
 from .chat import chat as chat_engine
+from . import memory as mem
 from .reports import generate_excel, generate_pdf, generate_excel_from_spec, fetch_report_rows, fetch_financial_rows
 from . import report_spec as report_spec_module
+from . import bde_sop
 
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 
@@ -67,16 +70,17 @@ def get_skus(branch: str | None = Query(None)):
       others  → everything else (Badam Powder, Puliogare, Rava Idli, Cups, etc.)
     """
     rows = query("""
-        SELECT DISTINCT ON (LOWER(sku_name))
+        SELECT DISTINCT ON (LOWER(TRIM(sku_name)))
+            id AS sku_id,
             sku_name,
             category
         FROM rate_cards
         WHERE sku_name IS NOT NULL AND category IS NOT NULL
-        ORDER BY LOWER(sku_name), sku_name
+        ORDER BY LOWER(TRIM(sku_name)), id
     """)
 
     skus = []
-    for idx, r in enumerate(rows, start=1):
+    for r in rows:
         cat = (r.get("category") or "").lower()
         if "coffee" in cat or "filter" in cat or "instant" in cat or "chicory" in cat or "decoction" in cat:
             b = "coffee"
@@ -89,7 +93,9 @@ def get_skus(branch: str | None = Query(None)):
             continue
 
         skus.append({
-            "sku_id": idx,
+            # This is a database identifier, not the transient position in the
+            # response list.  Report queries resolve it back to the SKU name.
+            "sku_id": r["sku_id"],
             "sku_name": r["sku_name"],
             "branch": b,
         })
@@ -129,6 +135,35 @@ async def chat_endpoint(req: ChatRequest):
     return result
 
 
+@app.delete("/api/chat/{conversation_id}")
+async def delete_conversation(conversation_id: str = Path(..., description="Conversation ID to delete")):
+    """Clear conversation memory for a chat session (used by 'New Chat' button)."""
+    deleted = mem.delete_conversation(conversation_id)
+    return {"deleted": deleted, "conversation_id": conversation_id}
+
+
+@app.get("/api/chat/{conversation_id}/download-report/{report_id}")
+async def download_chat_report(
+    conversation_id: str = Path(..., description="Conversation ID"),
+    report_id: str = Path(..., description="Report ID"),
+):
+    """Download an Excel report generated from conversation memory."""
+    report_data = mem.get_conversation_report(conversation_id, report_id)
+    if not report_data:
+        return JSONResponse(
+            status_code=404,
+            content={"status": "not_found", "message": "Report expired or not found."},
+        )
+    file_bytes, filename = report_data
+    return Response(
+        content=file_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}'
+        },
+    )
+
+
 # ─────────────── Reports ───────────────
 
 class ReportRequest(BaseModel):
@@ -162,6 +197,17 @@ async def report_endpoint(req: ReportRequest):
             headers={"Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}'},
         )
     else:
+        # ── Canonical BDE Report path ──
+        if req.notes and bde_sop.is_bde_report_request(req.notes):
+            route_data = bde_sop.extract_bde_report_data()
+            data = bde_sop.build_canonical_bde_workbook(route_data, sheet_title="Performance Report")
+            filename = f"BDE_Performance_Report_{req.date_to.replace('/', '-')}.xlsx"
+            return Response(
+                content=data,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}'},
+            )
+
         # ── AI-driven path: notes field is a natural language instruction ──
         if req.notes and req.notes.strip():
             # 1. Fetch data once (shared by spec builder and workbook generator)
@@ -200,3 +246,26 @@ async def report_endpoint(req: ReportRequest):
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}'},
         )
+
+
+@app.get("/api/reports/bde")
+async def get_bde_report(as_of_date: str | None = Query(None)):
+    """Generate and download the canonical BDE Performance Report in Excel (.xlsx)."""
+    route_data = bde_sop.extract_bde_report_data(report_date=as_of_date)
+    sheet_name = f"Report {as_of_date}" if as_of_date else "Performance Report"
+    data = bde_sop.build_canonical_bde_workbook(route_data, sheet_title=sheet_name)
+    filename = f"BDE_Performance_Report_{as_of_date or 'latest'}.xlsx"
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}'},
+    )
+
+
+# ─────────────── Serve Built Frontend (Single Unified URL) ───────────────
+frontend_dist = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend", "dist")
+)
+if os.path.exists(frontend_dist):
+    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="static")
+

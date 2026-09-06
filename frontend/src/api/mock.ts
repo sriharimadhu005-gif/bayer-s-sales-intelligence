@@ -36,6 +36,18 @@ export async function mockChat(message: string, conversationId: string | null): 
   if (/nothing|unknown|no data/i.test(message)) {
     return { conversation_id: conversationId ?? crypto.randomUUID(), answer_text: "I couldn't find data for that. Try narrowing the date range or checking the product name.", table: null, chart: null, report_eligible: false, report_prefill: null }
   }
+  if (/generate report|export to excel|download report|create excel|convert this into excel|give this as xlsx|excel|xlsx/i.test(message)) {
+    return {
+      conversation_id: conversationId ?? crypto.randomUUID(),
+      answer_text: 'Report generated successfully.',
+      table: null,
+      chart: null,
+      report_eligible: true,
+      report_prefill: null,
+      excel_download_url: '/api/chat/mock/download-report/mock-report-id',
+      excel_filename: 'Sales_Report_Demo.xlsx',
+    }
+  }
   const asksForChart = /chart|graph|compare|trend/i.test(message)
   return {
     conversation_id: conversationId ?? crypto.randomUUID(),
@@ -44,6 +56,8 @@ export async function mockChat(message: string, conversationId: string | null): 
     chart: asksForChart ? { type: 'bar', data: { labels: ['Route 3', 'Route 1', 'Route 5'], values: [1240, 1051, 842] } } : null,
     report_eligible: true,
     report_prefill: { date_from: '10/08/2026', date_to: '16/08/2026', days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], route_ids: [3], branches: ['coffee'], sku_ids: null, customer_ids: null },
+    excel_download_url: null,
+    excel_filename: null,
   }
 }
 

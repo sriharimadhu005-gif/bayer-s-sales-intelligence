@@ -96,6 +96,21 @@ def _build_report_query(
         if branch_conditions:
             conditions.append(f"({' OR '.join(branch_conditions)})")
 
+    # SKU filter.  The client submits rate_cards IDs returned by /api/meta/skus.
+    # Resolve those IDs to normalized names first: a rate card is customer-specific,
+    # while a selected SKU must match that product across every customer's sales.
+    if sku_ids:
+        placeholders = ", ".join(f"${idx + i}" for i in range(len(sku_ids)))
+        conditions.append(
+            "LOWER(TRIM(ds.sku_name)) IN ("
+            "SELECT LOWER(TRIM(selected_rc.sku_name)) "
+            "FROM rate_cards selected_rc "
+            f"WHERE selected_rc.id IN ({placeholders})"
+            ")"
+        )
+        params.extend(sku_ids)
+        idx += len(sku_ids)
+
     # Customer filter
     if customer_ids:
         placeholders = ", ".join(f"${idx + i}" for i in range(len(customer_ids)))
@@ -1006,3 +1021,229 @@ def generate_excel_from_spec(
     wb.save(buf)
     buf.seek(0)
     return buf.getvalue(), None
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Conversation Excel Export (Single Source of Truth)
+#  Converts conversational datasets into standard multi-tab workbooks
+# ═══════════════════════════════════════════════════════════════════
+
+def export_conversation_report(
+    rows: list[dict],
+    columns: list[str] | None = None,
+    title: str = "Sales Report",
+    filters: dict | None = None,
+) -> tuple[bytes, str]:
+    """
+    Generate a canonical multi-sheet Excel report from conversational memory.
+    Uses the project's standard styling, auto-column sizing, and typography.
+
+    Returns:
+        tuple[bytes, str]: (xlsx_file_bytes, meaningful_filename)
+    """
+    if not rows:
+        raise ValueError("Cannot generate an Excel report with empty rows.")
+
+    wb = Workbook()
+
+    # Determine columns
+    if not columns:
+        columns = list(rows[0].keys())
+
+    # ── Generate Meaningful Filename ──
+    clean_title = re.sub(r"[^\w\s-]", "", title).strip()
+    words = clean_title.split()[:4]
+    base_name = "_".join(words) if words else "Sales_Report"
+    
+    date_suffix = ""
+    if filters and filters.get("date_from") and filters.get("date_to"):
+        d_from = str(filters["date_from"]).replace("/", "-")
+        d_to = str(filters["date_to"]).replace("/", "-")
+        date_suffix = f"_{d_from}_to_{d_to}"
+    elif any("date" in c.lower() for c in columns):
+        # Scan for date bounds in data
+        date_vals = [str(r[c]) for r in rows for c in columns if "date" in c.lower() and r.get(c)]
+        if date_vals:
+            min_d = min(date_vals)[:10].replace("/", "-")
+            max_d = max(date_vals)[:10].replace("/", "-")
+            date_suffix = f"_{min_d}_to_{max_d}"
+    else:
+        date_suffix = f"_{datetime.now().strftime('%Y%m%d')}"
+
+    filename = f"{base_name}{date_suffix}.xlsx"
+
+    # ── Tab 1: Executive Summary ──
+    ws1 = wb.active
+    ws1.title = "Executive Summary"
+
+    # Compute key aggregate metrics
+    metrics = [
+        ["Report Title", title],
+        ["Generated At", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+        ["Total Rows Exported", len(rows)],
+    ]
+
+    # Look for common numeric columns to summarize
+    for col in columns:
+        col_lower = col.lower()
+        if any(k in col_lower for k in ["qty", "volume", "kg", "revenue", "amount", "total", "cash", "credit"]):
+            try:
+                numeric_vals = [float(r[col]) for r in rows if r.get(col) is not None]
+                if numeric_vals:
+                    col_sum = sum(numeric_vals)
+                    col_avg = col_sum / len(numeric_vals)
+                    label = col.replace("_", " ").title()
+                    if "revenue" in col_lower or "amount" in col_lower or "cash" in col_lower or "credit" in col_lower:
+                        metrics.append([f"Total {label} (₹)", f"{col_sum:,.2f}"])
+                        metrics.append([f"Average {label} (₹)", f"{col_avg:,.2f}"])
+                    else:
+                        metrics.append([f"Total {label}", f"{col_sum:,.1f}"])
+            except (ValueError, TypeError):
+                pass
+
+    # Look for categorical entity counts
+    for col in columns:
+        col_lower = col.lower()
+        if any(k in col_lower for k in ["customer", "client", "sku", "product", "route", "branch", "zone"]):
+            unique_items = len(set(str(r[col]) for r in rows if r.get(col) is not None))
+            label = col.replace("_", " ").title()
+            metrics.append([f"Unique {label}s", unique_items])
+
+    ws1.append(["Metric", "Value"])
+    for m in metrics:
+        ws1.append(m)
+
+    _style_header(ws1, 2)
+    _auto_width(ws1, 2)
+
+    # ── Tab 2: Detailed Data ──
+    sheet2_name = (title[:25] if title else "Data Results").strip()
+    ws2 = wb.create_sheet(sheet2_name)
+
+    # Header labels
+    header_labels = [c.replace("_", " ").title() for c in columns]
+    ws2.append(header_labels)
+
+    numeric_cols = set()
+    currency_cols = set()
+    percent_cols = set()
+    date_cols = set()
+
+    for col_idx, col in enumerate(columns, start=1):
+        col_lower = col.lower()
+        if any(k in col_lower for k in ["rev", "rate", "price", "amount", "cash", "credit", "balance", "cost", "₹"]):
+            currency_cols.add(col_idx)
+        elif any(k in col_lower for k in ["pct", "percent", "share", "%"]):
+            percent_cols.add(col_idx)
+        elif any(k in col_lower for k in ["qty", "volume", "kg", "count", "nos"]):
+            numeric_cols.add(col_idx)
+        elif any(k in col_lower for k in ["date", "time", "day"]):
+            date_cols.add(col_idx)
+
+    # Populate rows
+    for r_idx, r in enumerate(rows, start=2):
+        row_vals = []
+        for col in columns:
+            val = r.get(col)
+            if isinstance(val, (date, datetime)):
+                row_vals.append(val.isoformat())
+            elif isinstance(val, Decimal):
+                row_vals.append(float(val))
+            elif isinstance(val, (int, float)):
+                row_vals.append(val)
+            elif val is None:
+                row_vals.append("")
+            else:
+                # Try float conversion if string represents number
+                str_v = str(val).replace(",", "").strip()
+                if str_v.endswith("%"):
+                    try:
+                        row_vals.append(float(str_v[:-1]) / 100.0)
+                        continue
+                    except ValueError:
+                        pass
+                try:
+                    num_v = float(str_v)
+                    row_vals.append(int(num_v) if num_v.is_integer() else num_v)
+                except ValueError:
+                    row_vals.append(str(val))
+
+        ws2.append(row_vals)
+
+        # Alternating zebra stripe
+        if r_idx % 2 == 0:
+            for c_idx in range(1, len(columns) + 1):
+                ws2.cell(row=r_idx, column=c_idx).fill = ALT_FILL
+
+    # Number formatting & alignment
+    for r_idx in range(2, len(rows) + 2):
+        for c_idx in range(1, len(columns) + 1):
+            cell = ws2.cell(row=r_idx, column=c_idx)
+            cell.border = BORDER
+            cell.font = DATA_FONT
+
+            if c_idx in currency_cols:
+                cell.number_format = '₹ #,##0.00'
+                cell.alignment = Alignment(horizontal="right")
+            elif c_idx in percent_cols:
+                cell.number_format = '0.0%'
+                cell.alignment = Alignment(horizontal="right")
+            elif c_idx in numeric_cols:
+                cell.number_format = '#,##0.0' if isinstance(cell.value, float) else '#,##0'
+                cell.alignment = Alignment(horizontal="right")
+            elif c_idx in date_cols:
+                cell.alignment = Alignment(horizontal="center")
+            else:
+                cell.alignment = Alignment(horizontal="left")
+
+    # Optional Totals row
+    summable_cols = currency_cols | numeric_cols
+    if summable_cols and len(rows) > 1:
+        total_row_idx = len(rows) + 2
+        total_row = ["TOTAL"] + ["" for _ in range(len(columns) - 1)]
+        ws2.append(total_row)
+        for c_idx in range(1, len(columns) + 1):
+            cell = ws2.cell(row=total_row_idx, column=c_idx)
+            cell.fill = TOTAL_FILL
+            cell.font = TOTAL_FONT
+            cell.border = BORDER
+            if c_idx in summable_cols:
+                col_letter = get_column_letter(c_idx)
+                cell.value = f"=SUM({col_letter}2:{col_letter}{total_row_idx - 1})"
+                if c_idx in currency_cols:
+                    cell.number_format = '₹ #,##0.00'
+                else:
+                    cell.number_format = '#,##0.0'
+                cell.alignment = Alignment(horizontal="right")
+
+    _style_header(ws2, len(columns))
+    _auto_width(ws2, len(columns))
+    ws2.views.sheetView[0].showGridLines = True
+
+    # ── Tab 3: Filters & Audit ──
+    ws3 = wb.create_sheet("Filters & Audit")
+    audit_data = [
+        ["Parameter", "Value"],
+        ["Generated At", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+        ["Report Focus", title],
+        ["Total Data Points", len(rows)],
+        ["Source", "Conversational AI Analysis Memory"],
+    ]
+    if filters:
+        for k, v in filters.items():
+            if v is not None:
+                audit_data.append([k.replace("_", " ").title(), str(v)])
+
+    for row_data in audit_data:
+        ws3.append(row_data)
+
+    _style_header(ws3, 2)
+    _auto_width(ws3, 2)
+    ws3.views.sheetView[0].showGridLines = True
+
+    # Write output buffer
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue(), filename
+

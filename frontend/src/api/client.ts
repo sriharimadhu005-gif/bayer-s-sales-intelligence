@@ -29,6 +29,14 @@ export const api = {
   getSkus: async (branch?: Branch): Promise<Sku[]> => useMocks ? mockSkus(branch) : request(`/meta/skus${branch ? `?branch=${branch}` : ''}`),
   getCustomers: async (routeIds: number[]): Promise<Customer[]> => useMocks ? mockCustomers(routeIds) : request(`/meta/customers?route_ids=${routeIds.join(',')}`),
   chat: async (message: string, conversationId: string | null): Promise<ChatResponse> => useMocks ? mockChat(message, conversationId) : request('/chat', { method: 'POST', body: JSON.stringify({ message, conversation_id: conversationId }) }),
+  clearConversation: async (conversationId: string): Promise<void> => {
+    if (useMocks || !conversationId) return
+    try {
+      await fetch(`${baseUrl}/chat/${conversationId}`, { method: 'DELETE' })
+    } catch {
+      // Silent fail — clearing memory is best-effort
+    }
+  },
   report: async (payload: ReportRequest): Promise<ReportResult> => {
     if (useMocks) return mockReport(payload)
     let response: Response

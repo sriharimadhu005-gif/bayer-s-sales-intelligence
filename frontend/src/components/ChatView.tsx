@@ -10,6 +10,8 @@ type Message = {
   table?: DataTable | null
   chart?: ChartPayload | null
   prefill?: ReportPrefill | null
+  excelDownloadUrl?: string | null
+  excelFilename?: string | null
   errorKind?: 'connection' | 'query'
 }
 
@@ -43,6 +45,8 @@ export function ChatView({ onGenerateReport }: { onGenerateReport: (prefill: Rep
         table: response.table,
         chart: response.chart,
         prefill: response.report_eligible ? response.report_prefill : null,
+        excelDownloadUrl: response.excel_download_url,
+        excelFilename: response.excel_filename,
       }])
     } catch (error) {
       const isConnectionError = error instanceof ApiError || error instanceof TypeError
@@ -68,6 +72,9 @@ export function ChatView({ onGenerateReport }: { onGenerateReport: (prefill: Rep
   }
 
   function clearConversation() {
+    if (conversationId) {
+      void api.clearConversation(conversationId)
+    }
     setMessages([initialMessage])
     setConversationId(null)
     setDraft('')
@@ -106,7 +113,28 @@ export function ChatView({ onGenerateReport }: { onGenerateReport: (prefill: Rep
                   </div>
                 )}
                 {message.chart && <InlineChart chart={message.chart} />}
-                {message.prefill && (
+                {message.excelDownloadUrl && (
+                  <div className="excel-download-card">
+                    <div className="excel-download-status">
+                      <span className="excel-status-check">✅</span>
+                      <div className="excel-status-text">
+                        <strong>Report Generated Successfully</strong>
+                        <span className="excel-filename-text">{message.excelFilename || 'Sales_Report.xlsx'}</span>
+                      </div>
+                    </div>
+                    <a
+                      href={message.excelDownloadUrl}
+                      download={message.excelFilename || 'Sales_Report.xlsx'}
+                      className="excel-download-action-btn"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <span className="excel-icon" aria-hidden="true">📥</span>
+                      <span>Download Excel</span>
+                    </a>
+                  </div>
+                )}
+                {message.prefill && !message.excelDownloadUrl && (
                   <button type="button" className="report-handoff" onClick={() => onGenerateReport(message.prefill!)}>
                     Generate this as a report <span aria-hidden="true">→</span>
                   </button>

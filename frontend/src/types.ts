@@ -48,6 +48,8 @@ export interface ChatResponse {
   chart: ChartPayload | null
   report_eligible: boolean
   report_prefill: ReportPrefill | null
+  excel_download_url?: string | null
+  excel_filename?: string | null
 }
 
 export interface ReportRequest {

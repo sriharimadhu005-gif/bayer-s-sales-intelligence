@@ -21,6 +21,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 from . import db
+from . import date_utils
 
 # Directory containing the canonical markdown standards
 DOCS_DIR = Path(__file__).resolve().parent.parent.parent / "docs" / "report_standards"
@@ -127,7 +128,7 @@ def extract_bde_report_data(report_date: date | str | None = None) -> list[dict]
     # 1. Resolve date
     if report_date is None:
         latest = db.query("SELECT MAX(sale_date) as max_d FROM daily_sales;")
-        ref_date = latest[0]["max_d"] if latest and latest[0]["max_d"] else date.today()
+        ref_date = latest[0]["max_d"] if latest and latest[0]["max_d"] else date_utils.get_current_date()
     elif isinstance(report_date, str):
         ref_date = datetime.strptime(report_date, "%Y-%m-%d").date()
     else:

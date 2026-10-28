@@ -34,11 +34,25 @@ export interface ChartPayload {
 export interface ReportPrefill {
   date_from?: string
   date_to?: string
-  days?: string[] | null
   route_ids?: number[] | null
   branches?: Branch[] | null
   sku_ids?: number[] | null
   customer_ids?: string[] | null
+}
+
+export interface ClarificationOption {
+  id: number | string
+  label: string
+  value: string
+  badge?: string | null
+  detail?: string | null
+}
+
+export interface ClarificationPayload {
+  question: string
+  entity_type: 'sku' | 'customer' | string
+  prompt_hint?: string
+  options: ClarificationOption[]
 }
 
 export interface ChatResponse {
@@ -50,12 +64,14 @@ export interface ChatResponse {
   report_prefill: ReportPrefill | null
   excel_download_url?: string | null
   excel_filename?: string | null
+  report_display_name?: string | null
+  report_period_label?: string | null
+  clarification?: ClarificationPayload | null
 }
 
 export interface ReportRequest {
   date_from: string
   date_to: string
-  days?: string[]
   route_ids?: number[]
   branches?: Branch[]
   sku_ids?: number[]

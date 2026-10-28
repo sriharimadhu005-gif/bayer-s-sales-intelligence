@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 from .db import query
 from .chat import chat as chat_engine
 from . import memory as mem
-from .reports import generate_excel, generate_pdf, generate_excel_from_spec, fetch_report_rows, fetch_financial_rows
+from .reports import generate_excel, generate_pdf, generate_excel_from_spec, generate_standard_excel, fetch_report_rows, fetch_financial_rows, determine_report_type
 from . import report_spec as report_spec_module
 from . import bde_sop
 
@@ -105,7 +105,10 @@ def get_skus(branch: str | None = Query(None)):
 
 @app.get("/api/meta/customers")
 def get_customers(route_ids: str = Query("")):
-    """Return customers for given route IDs (comma-separated)."""
+    """
+    Return customers for given route IDs (comma-separated).
+    Prioritizes authoritative customer_master table, with fallback to legacy customers.
+    """
     if not route_ids.strip():
         return []
 
@@ -114,12 +117,44 @@ def get_customers(route_ids: str = Query("")):
         return []
 
     placeholders = ", ".join(["%s"] * len(ids))
+    # Query authoritative customer_master first
     rows = query(
-        f"SELECT customer_id, name FROM customers WHERE route_number IN ({placeholders}) ORDER BY name",
+        f"""
+        SELECT customer_id, customer_name AS name, tally_id, route_number
+        FROM customer_master 
+        WHERE route_number IN ({placeholders}) 
+        ORDER BY customer_name
+        """,
         ids,
     )
+    if not rows:
+        # Fallback to legacy customers table
+        rows = query(
+            f"SELECT customer_id, name, NULL AS tally_id, route_number FROM customers WHERE route_number IN ({placeholders}) ORDER BY name",
+            ids,
+        )
 
-    return [{"customer_id": r["customer_id"], "canonical_name": r["name"]} for r in rows]
+    return [
+        {
+            "customer_id": r["customer_id"],
+            "canonical_name": r["name"],
+            "tally_id": r.get("tally_id"),
+            "route_number": r.get("route_number"),
+        }
+        for r in rows
+    ]
+
+
+@app.get("/api/meta/resolve-customer")
+def resolve_customer_endpoint(
+    query_str: str = Query(..., alias="query"),
+    location: str | None = Query(None),
+    route: int | None = Query(None),
+):
+    """Resolve customer using 4-tier authoritative priority."""
+    from .customer_resolution import resolve_customer
+    res = resolve_customer(query_str, location_hint=location, route_hint=route)
+    return res.to_dict()
 
 
 # ─────────────── Chat ───────────────
@@ -208,9 +243,13 @@ async def report_endpoint(req: ReportRequest):
                 headers={"Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{quote(filename)}'},
             )
 
-        # ── AI-driven path: notes field is a natural language instruction ──
-        if req.notes and req.notes.strip():
-            # 1. Fetch data once (shared by spec builder and workbook generator)
+        # ── Mandatory Report Type Detection & Execution Pipeline ──
+        from .reports import parse_description_overrides
+        report_type = determine_report_type(req.notes)
+        overrides = parse_description_overrides(req.notes) if req.notes else {}
+
+        # AI-driven path: complex natural language instruction (only if not a summary request and not already handled by overrides)
+        if req.notes and req.notes.strip() and report_type != "SUMMARY" and not overrides:
             rows = fetch_report_rows(
                 req.date_from, req.date_to, req.days,
                 req.route_ids, req.branches, req.sku_ids, req.customer_ids,
@@ -222,23 +261,31 @@ async def report_endpoint(req: ReportRequest):
                 req.date_from, req.date_to, req.route_ids, req.customer_ids,
             )
 
-            # 2. Ask the LLM to interpret the instruction and produce a ReportSpec
-            spec = await report_spec_module.build_spec(rows, fin_rows, req)
-
-            # 3. Build the workbook from the spec
-            data, err = generate_excel_from_spec(
-                rows, fin_rows, spec,
-                req.date_from, req.date_to, req,
-            )
+            # Ask LLM to interpret the instruction into ReportSpec
+            try:
+                spec = await report_spec_module.build_spec(rows, fin_rows, req)
+                data, err = generate_excel_from_spec(
+                    rows, fin_rows, spec,
+                    req.date_from, req.date_to, req,
+                )
+            except Exception:
+                data, err = generate_standard_excel(
+                    req.date_from, req.date_to, req.days,
+                    req.route_ids, req.branches, req.sku_ids,
+                    req.customer_ids, req.notes,
+                )
         else:
-            # ── Default path: standard 4-tab layout, no LLM call ──
-            data, err = generate_excel(
+            # Standard Report Pipeline:
+            # Handles DETAIL reports with Description overrides or SUMMARY reports if explicitly requested
+            data, err = generate_standard_excel(
                 req.date_from, req.date_to, req.days,
                 req.route_ids, req.branches, req.sku_ids,
                 req.customer_ids, req.notes,
             )
 
         if err:
+            if "validation" in err.lower():
+                return JSONResponse(status_code=500, content={"status": "validation_error", "message": err})
             return JSONResponse(content={"status": "no_data", "message": err})
         filename = f"sales-report-{req.date_from.replace('/', '-')}.xlsx"
         return Response(

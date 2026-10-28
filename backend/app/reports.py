@@ -125,18 +125,19 @@ def _build_report_query(
         ds.sale_date,
         ds.route_number,
         ds.customer_id,
-        c.name AS customer_name,
+        COALESCE(cm.customer_name, c.name, ds.customer_name) AS customer_name,
         ds.sku_name,
         ds.qty_kg,
         rc.category,
         rc.approved_inclusive,
         ROUND(ds.qty_kg * COALESCE(rc.approved_inclusive, rc.std_rate, 0), 2) AS estimated_revenue
     FROM daily_sales ds
+    LEFT JOIN customer_master cm ON ds.customer_id = cm.customer_id
     LEFT JOIN customers c ON ds.customer_id = c.customer_id
     LEFT JOIN rate_cards rc ON ds.customer_id = rc.customer_id
                             AND LOWER(TRIM(ds.sku_name)) = LOWER(TRIM(rc.sku_name))
     WHERE {where_clause}
-    ORDER BY ds.sale_date, ds.route_number, c.name, ds.sku_name
+    ORDER BY ds.sale_date, ds.route_number, customer_name, ds.sku_name
     """
     return sql, params
 
@@ -226,116 +227,19 @@ def generate_excel(
     branches: list[str] | None,
     sku_ids: list[int] | None,
     customer_ids: list[str] | None,
-    notes: str | None,
+    notes: str | None = None,
 ) -> tuple[bytes | None, str | None]:
-    """Generate an Excel report. Returns (bytes, None) or (None, error_message)."""
-
-    sql, params = _build_report_query(date_from, date_to, days, route_ids, branches, sku_ids, customer_ids)
-
-    # psycopg2 uses %s placeholders — convert $N to %s
-    converted_sql = re.sub(r"\$\d+", "%s", sql)
-    rows = db.query(converted_sql, params)
-
-    if not rows:
-        return None, "No data found for the selected filters."
-
-    # Financial data
-    fin_sql, fin_params = _build_financial_query(date_from, date_to, route_ids, customer_ids)
-    converted_fin_sql = re.sub(r"\$\d+", "%s", fin_sql)
-    fin_rows = db.query(converted_fin_sql, fin_params)
-
-    wb = Workbook()
-
-    # ── Tab 1: Executive Summary ──
-    ws1 = wb.active
-    ws1.title = "Executive Summary"
-
-    total_qty = sum(float(r.get("qty_kg") or 0) for r in rows)
-    total_rev = sum(float(r.get("estimated_revenue") or 0) for r in rows)
-    unique_customers = len(set(r["customer_id"] for r in rows if r.get("customer_id")))
-    unique_skus = len(set(r["sku_name"] for r in rows if r.get("sku_name")))
-    unique_routes = sorted(set(r["route_number"] for r in rows if r.get("route_number")))
-    total_cash = sum(float(r.get("cash") or 0) for r in fin_rows)
-    total_credit = sum(float(r.get("credit") or 0) for r in fin_rows)
-
-    summary_data = [
-        ["Metric", "Value"],
-        ["Report Period", f"{date_from} to {date_to}"],
-        ["Total Sales Volume (KG)", f"{total_qty:,.1f}"],
-        ["Estimated Revenue (₹)", f"{total_rev:,.2f}"],
-        ["Active Customers", unique_customers],
-        ["Unique SKUs Sold", unique_skus],
-        ["Routes Covered", ", ".join(f"R{r}" for r in unique_routes)],
-        ["Total Cash Collected (₹)", f"{total_cash:,.2f}"],
-        ["Total Credit (₹)", f"{total_credit:,.2f}"],
-        ["Total Transactions", len(rows)],
-    ]
-    for row_data in summary_data:
-        ws1.append(row_data)
-
-    _style_header(ws1, 2)
-    _auto_width(ws1, 2)
-
-    # ── Tab 2: Sales Breakdown ──
-    ws2 = wb.create_sheet("Sales Breakdown")
-    headers = ["Date", "Route", "Customer ID", "Customer Name", "SKU", "Qty (KG)", "Category", "Rate (₹)", "Revenue (₹)"]
-    ws2.append(headers)
-
-    for r in rows:
-        ws2.append([
-            r.get("sale_date").isoformat() if isinstance(r.get("sale_date"), (date, datetime)) else str(r.get("sale_date", "")),
-            r.get("route_number"),
-            r.get("customer_id"),
-            r.get("customer_name"),
-            r.get("sku_name"),
-            float(r.get("qty_kg") or 0),
-            r.get("category"),
-            float(r.get("approved_inclusive") or 0),
-            float(r.get("estimated_revenue") or 0),
-        ])
-
-    _style_header(ws2, len(headers))
-    _auto_width(ws2, len(headers))
-
-    # ── Tab 3: Financial Summary ──
-    if fin_rows:
-        ws3 = wb.create_sheet("Financial Summary")
-        fin_headers = ["Date", "Route", "Customer ID", "Customer Name", "Cash (₹)", "Credit (₹)", "Closing Balance (₹)"]
-        ws3.append(fin_headers)
-        for r in fin_rows:
-            ws3.append([
-                r.get("summary_date").isoformat() if isinstance(r.get("summary_date"), (date, datetime)) else str(r.get("summary_date", "")),
-                r.get("route_number"),
-                r.get("customer_id"),
-                r.get("customer_name"),
-                float(r.get("cash") or 0),
-                float(r.get("credit") or 0),
-                float(r.get("closing_balance") or 0),
-            ])
-        _style_header(ws3, len(fin_headers))
-        _auto_width(ws3, len(fin_headers))
-
-    # ── Tab 4: Filters & Audit ──
-    ws4 = wb.create_sheet("Filters & Audit")
-    audit_data = [
-        ["Parameter", "Value"],
-        ["Generated At", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
-        ["Date Range", f"{date_from} — {date_to}"],
-        ["Days of Week", ", ".join(days) if days else "All days"],
-        ["Routes", ", ".join(f"R{r}" for r in route_ids) if route_ids else "All routes"],
-        ["Branches", ", ".join(branches) if branches else "All branches"],
-        ["Customer Filter", ", ".join(customer_ids) if customer_ids else "All customers"],
-    ]
-    for row_data in audit_data:
-        ws4.append(row_data)
-    _style_header(ws4, 2)
-    _auto_width(ws4, 2)
-
-    # Write to bytes
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf.getvalue(), None
+    """Generate an Excel report following the Mandatory Detail Report Generation Policy."""
+    return generate_standard_excel(
+        date_from=date_from,
+        date_to=date_to,
+        days=days,
+        route_ids=route_ids,
+        branches=branches,
+        sku_ids=sku_ids,
+        customer_ids=customer_ids,
+        notes=notes,
+    )
 
 
 # ─────────────── PDF Generator ───────────────
@@ -921,7 +825,7 @@ def _build_audit_sheet(
     audit_rows = [
         ["Parameter", "Value"],
         ["Generated At", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
-        ["Date Range", f"{date_from} \u2014 {date_to}"],
+        ["Date Range", f"{date_from} — {date_to}"],
         ["Routes",    filters_info.get("routes", "All routes")],
         ["Branches",  filters_info.get("branches", "All branches")],
         ["Customers", filters_info.get("customers", "All customers")],
@@ -931,6 +835,685 @@ def _build_audit_sheet(
     _style_header(ws, 2)
     if auto_size:
         _auto_width(ws, 2)
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Standard Report Policy & Builders
+# ═══════════════════════════════════════════════════════════════════
+
+def determine_report_type(notes: str | None) -> str:
+    """
+    Mandatory Report Type Detection:
+    1. DETAIL REPORT (Default)
+    2. SUMMARY REPORT (Only when explicitly requested)
+
+    If the user clicks "Generate Report" after selecting filters, always
+    assume they want a DETAIL REPORT unless they explicitly ask for a summary.
+    """
+    if not notes or not notes.strip():
+        return "DETAIL"
+
+    clean = notes.strip().lower()
+
+    # Explicit summary report triggers
+    summary_triggers = [
+        "create a summary",
+        "create summary",
+        "executive report",
+        "executive summary",
+        "kpi report",
+        "kpi summary",
+        "management dashboard",
+        "management summary",
+        "summary report",
+        "metric summary",
+        "metrics summary",
+        "kpis only",
+        "kpi only",
+        "summary only",
+        "dashboard only",
+        "high level summary",
+    ]
+    for trigger in summary_triggers:
+        if trigger in clean:
+            return "SUMMARY"
+
+    # Regex patterns for explicit summary requests
+    if re.search(r"\b(only\s+summary|summary\s+only|executive\s+dashboard|kpi\s+dashboard)\b", clean):
+        return "SUMMARY"
+
+    return "DETAIL"
+
+
+def parse_description_overrides(notes: str | None) -> dict:
+    """
+    Semantically interpret the Description field to extract overrides for DETAIL reports:
+      - Add columns
+      - Remove columns
+      - Replace columns
+      - Reorder columns
+      - Calculated columns / aggregations
+
+    Example from prompt:
+      Default: SKU A, SKU B, SKU C
+      Description: "I don't need SKU-wise data. Show only Total Sales."
+      Then generate: S.No, Date, Route, Customer ID, Customer Name, Total Sales
+    """
+    if not notes or not notes.strip():
+        return {}
+
+    clean = notes.strip().lower()
+    overrides: dict = {}
+
+    # 1. Check for SKU column suppression / replacement
+    no_sku_patterns = [
+        r"don'?t\s+need\s+sku",
+        r"no\s+sku",
+        r"without\s+sku",
+        r"exclude\s+sku",
+        r"hide\s+sku",
+        r"remove\s+sku",
+        r"only\s+total\s+sales",
+        r"only\s+total\s+qty",
+        r"show\s+only\s+total",
+    ]
+    if any(re.search(p, clean) for p in no_sku_patterns):
+        overrides["remove_columns"] = ["sku_columns"]
+        if "revenue" in clean or "amount" in clean:
+            overrides["replace_sku_with"] = "total_revenue"
+        else:
+            overrides["replace_sku_with"] = "total_sales"
+    elif "total sales" in clean and ("replace" in clean or "instead" in clean or "only" in clean or "show" in clean):
+        overrides["remove_columns"] = ["sku_columns"]
+        overrides["replace_sku_with"] = "total_sales"
+    elif "total quantity" in clean and ("replace" in clean or "instead" in clean or "only" in clean or "show" in clean):
+        overrides["remove_columns"] = ["sku_columns"]
+        overrides["replace_sku_with"] = "total_qty"
+
+    # 2. Check for removing default columns
+    remove_defaults = []
+    if re.search(r"\b(no|remove|without|exclude|hide)\s+(customer\s+id|cid)\b", clean):
+        remove_defaults.append("customer_id")
+    if re.search(r"\b(no|remove|without|exclude|hide)\s+(customer\s+name|cname)\b", clean):
+        remove_defaults.append("customer_name")
+    if re.search(r"\b(no|remove|without|exclude|hide)\s+route\b", clean):
+        remove_defaults.append("route")
+    if re.search(r"\b(no|remove|without|exclude|hide)\s+(s\.?no|serial\s+number)\b", clean):
+        remove_defaults.append("s_no")
+    if re.search(r"\b(no|remove|without|exclude|hide)\s+date\b", clean):
+        remove_defaults.append("date")
+    if remove_defaults:
+        overrides["remove_default_columns"] = remove_defaults
+
+    # 3. Extra columns
+    extra_cols = []
+    if "outstanding" in clean or "closing balance" in clean:
+        extra_cols.append("closing_balance")
+    if "category" in clean and "add" in clean:
+        extra_cols.append("category")
+    if "rate" in clean and "add" in clean:
+        extra_cols.append("approved_rate")
+    if extra_cols:
+        overrides["extra_columns"] = extra_cols
+
+    # 4. Sort order
+    if "desc" in clean or "descending" in clean:
+        overrides["sort_order"] = "desc"
+
+    # 5. Totals row suppression
+    if "no totals" in clean or "without totals" in clean or "hide totals" in clean:
+        overrides["show_totals_row"] = False
+
+    return overrides
+
+
+def get_sku_names_for_ids(sku_ids: list[int] | None) -> list[str]:
+    """Look up canonical SKU names for a list of rate_cards IDs."""
+    if not sku_ids:
+        return []
+    placeholders = ", ".join("%s" for _ in sku_ids)
+    sql = f"SELECT id, sku_name FROM rate_cards WHERE id IN ({placeholders}) ORDER BY sku_name"
+    rows = db.query(sql, sku_ids)
+    seen = set()
+    sku_names = []
+    for r in rows:
+        name = str(r.get("sku_name") or "").strip()
+        if name and name not in seen:
+            seen.add(name)
+            sku_names.append(name)
+    return sku_names
+
+
+def _build_standard_report_sheet(
+    wb: Workbook,
+    ws_spec: dict,
+    rows: list[dict],
+    selected_sku_names: list[str] | None = None,
+) -> None:
+    """
+    Build a standard-format Detail Report worksheet where:
+    - Default columns: S.No | Date | Route | Customer ID | Customer Name | [one col per selected SKU]
+    - Row order: Date -> Route -> Customer
+    - SKU population: Each customer row contains quantity purchased for every selected SKU (0 if not purchased)
+    - One customer = One row (never duplicate rows for SKUs)
+    """
+    name = ws_spec.get("name", "Sales Data")[:31]
+    sort_order = ws_spec.get("sort_order", "asc")
+    show_totals = ws_spec.get("show_totals_row", True)
+    freeze = ws_spec.get("freeze_header", True)
+    auto_size = ws_spec.get("auto_size_columns", True)
+
+    extra_columns = ws_spec.get("extra_columns") or []
+    remove_columns = set(ws_spec.get("remove_columns") or [])
+    replace_sku_with = ws_spec.get("replace_sku_with")
+    remove_default = set(ws_spec.get("remove_default_columns") or [])
+
+    # Collect unique SKU names
+    all_skus: list[str] = []
+    if selected_sku_names:
+        all_skus = list(selected_sku_names)
+    elif ws_spec.get("sku_names"):
+        all_skus = list(ws_spec["sku_names"])
+    else:
+        all_skus = sorted({
+            str(r.get("sku_name") or "").strip()
+            for r in rows
+            if r.get("sku_name")
+        })
+
+    suppress_sku_columns = (
+        "sku_columns" in remove_columns
+        or replace_sku_with is not None
+    )
+
+    # Build the pivoted data structure
+    # Key: (sale_date_sort, route_number, customer_id)
+    from collections import OrderedDict
+    pivot: dict[tuple, dict] = OrderedDict()
+    customer_names: dict[str, str] = {}
+    date_displays: dict[str, str] = {}
+    customer_total_sales: dict[tuple, float] = {}
+
+    for r in rows:
+        sd = r.get("sale_date")
+        if isinstance(sd, (date, datetime)):
+            sd_date = sd if isinstance(sd, date) else sd.date()
+            sd_sort = sd_date.isoformat()
+            sd_display = sd_date.strftime("%d-%b-%Y")
+        else:
+            sd_str_raw = str(sd or "").strip()
+            sd_sort = sd_str_raw
+            try:
+                parsed = datetime.strptime(sd_str_raw[:10], "%Y-%m-%d").date()
+                sd_display = parsed.strftime("%d-%b-%Y")
+                sd_sort = parsed.isoformat()
+            except Exception:
+                sd_display = sd_str_raw
+
+        date_displays[sd_sort] = sd_display
+
+        route = int(r.get("route_number") or 0)
+        cid = str(r.get("customer_id") or "")
+        cname = str(r.get("customer_name") or "")
+        sku_raw = str(r.get("sku_name") or "").strip()
+        sku_key = sku_raw.lower()
+        qty = float(r.get("qty_kg") or 0)
+
+        customer_names[cid] = cname
+        key = (sd_sort, route, cid)
+
+        if key not in pivot:
+            pivot[key] = {}
+            customer_total_sales[key] = 0.0
+
+        pivot[key][sku_key] = pivot[key].get(sku_key, 0.0) + qty
+        customer_total_sales[key] += qty
+
+    # Sort strictly: Date ASC -> Route ASC -> Customer ASC
+    reverse = (sort_order == "desc")
+    sorted_keys = sorted(
+        pivot.keys(),
+        key=lambda k: (k[0], k[1], customer_names.get(k[2], "").lower(), k[2]),
+        reverse=reverse,
+    )
+
+    # Build column headers
+    base_headers: list[str] = []
+    base_fields: list[str] = []
+
+    if "s_no" not in remove_default:
+        base_headers.append("S.No")
+        base_fields.append("_sno")
+    if "date" not in remove_default and "sale_date" not in remove_default:
+        base_headers.append("Date")
+        base_fields.append("_date")
+    if "route" not in remove_default and "route_number" not in remove_default:
+        base_headers.append("Route")
+        base_fields.append("_route")
+    if "customer_id" not in remove_default:
+        base_headers.append("Customer ID")
+        base_fields.append("_cid")
+    if "customer_name" not in remove_default:
+        base_headers.append("Customer Name")
+        base_fields.append("_cname")
+
+    sku_headers: list[str] = []
+    if suppress_sku_columns:
+        if replace_sku_with:
+            label = replace_sku_with.replace("_", " ").title()
+            sku_headers.append(label)
+    else:
+        sku_headers = list(all_skus)
+
+    extra_headers = [ec.replace("_", " ").title() for ec in extra_columns]
+
+    all_headers = base_headers + sku_headers + extra_headers
+    total_cols = len(all_headers)
+
+    ws = wb.create_sheet(name)
+    ws.append(all_headers)
+    _style_header(ws, total_cols)
+
+    numeric_col_indices: set[int] = set()
+
+    for serial, key in enumerate(sorted_keys, start=1):
+        sd_sort, route, cid = key
+        sd_display = date_displays.get(sd_sort, sd_sort)
+        sku_dict = pivot[key]
+        cname = customer_names.get(cid, "")
+
+        row_vals: list = []
+
+        for field in base_fields:
+            if field == "_sno":
+                row_vals.append(serial)
+            elif field == "_date":
+                row_vals.append(sd_display)
+            elif field == "_route":
+                row_vals.append(f"Route {route}" if route else "")
+            elif field == "_cid":
+                row_vals.append(cid)
+            elif field == "_cname":
+                row_vals.append(cname)
+
+        base_len = len(row_vals)
+
+        if suppress_sku_columns:
+            if replace_sku_with:
+                tot = customer_total_sales.get(key, 0.0)
+                row_vals.append(round(tot, 2))
+                numeric_col_indices.add(base_len + 1)
+        else:
+            for si, sku in enumerate(all_skus):
+                qty = sku_dict.get(sku.strip().lower(), 0.0)
+                row_vals.append(round(qty, 2) if qty else 0)
+                numeric_col_indices.add(base_len + si + 1)
+
+        for _ in extra_columns:
+            row_vals.append("")
+
+        ws.append(row_vals)
+
+        # Zebra striping and formatting
+        r_idx = serial + 1
+        if r_idx % 2 == 0:
+            for ci in range(1, total_cols + 1):
+                ws.cell(row=r_idx, column=ci).fill = ALT_FILL
+        for ci in range(1, total_cols + 1):
+            cell = ws.cell(row=r_idx, column=ci)
+            cell.border = BORDER
+            cell.font = DATA_FONT
+
+    # Totals row
+    if show_totals and sorted_keys and numeric_col_indices:
+        total_row_idx = len(sorted_keys) + 2
+        totals = []
+        for ci_0 in range(total_cols):
+            ci = ci_0 + 1
+            if ci in numeric_col_indices:
+                col_letter = get_column_letter(ci)
+                totals.append(f"=SUM({col_letter}2:{col_letter}{total_row_idx - 1})")
+            elif ci_0 == 0:
+                totals.append("TOTAL")
+            else:
+                totals.append("")
+        ws.append(totals)
+        for ci in range(1, total_cols + 1):
+            cell = ws.cell(row=total_row_idx, column=ci)
+            cell.font = TOTAL_FONT
+            cell.fill = TOTAL_FILL
+            cell.border = BORDER
+            if ci in numeric_col_indices:
+                cell.number_format = '#,##0.00'
+                cell.alignment = Alignment(horizontal="right")
+
+    if freeze:
+        ws.freeze_panes = "A2"
+    if auto_size:
+        _auto_width(ws, total_cols)
+
+
+def generate_summary_excel(
+    date_from: str,
+    date_to: str,
+    days: list[str] | None,
+    route_ids: list[int] | None,
+    branches: list[str] | None,
+    sku_ids: list[int] | None,
+    customer_ids: list[str] | None,
+    notes: str | None = None,
+) -> tuple[bytes | None, str | None]:
+    """
+    Generate an Executive / KPI Summary Excel workbook.
+    ONLY called when explicitly requested (e.g. "Create a summary", "Executive report", "KPI report").
+    """
+    sql, params = _build_report_query(date_from, date_to, days, route_ids, branches, sku_ids, customer_ids)
+    converted_sql = re.sub(r"\$\d+", "%s", sql)
+    rows = db.query(converted_sql, params)
+    if not rows:
+        return None, "No data found for the selected filters."
+
+    fin_sql, fin_params = _build_financial_query(date_from, date_to, route_ids, customer_ids)
+    converted_fin_sql = re.sub(r"\$\d+", "%s", fin_sql)
+    fin_rows = db.query(converted_fin_sql, fin_params)
+
+    wb = Workbook()
+    ws1 = wb.active
+    ws1.title = "Executive Summary"
+
+    total_qty = sum(float(r.get("qty_kg") or 0) for r in rows)
+    total_rev = sum(float(r.get("estimated_revenue") or 0) for r in rows)
+    unique_customers = len(set(r["customer_id"] for r in rows if r.get("customer_id")))
+    unique_skus = len(set(r["sku_name"] for r in rows if r.get("sku_name")))
+    unique_routes = sorted(set(r["route_number"] for r in rows if r.get("route_number")))
+    total_cash = sum(float(r.get("cash") or 0) for r in fin_rows)
+    total_credit = sum(float(r.get("credit") or 0) for r in fin_rows)
+
+    summary_data = [
+        ["Metric", "Value"],
+        ["Report Period", f"{date_from} to {date_to}"],
+        ["Total Sales Volume (KG)", f"{total_qty:,.1f}"],
+        ["Estimated Revenue (₹)", f"{total_rev:,.2f}"],
+        ["Active Customers", unique_customers],
+        ["Unique SKUs Sold", unique_skus],
+        ["Routes Covered", ", ".join(f"R{r}" for r in unique_routes)],
+        ["Total Cash Collected (₹)", f"{total_cash:,.2f}"],
+        ["Total Credit (₹)", f"{total_credit:,.2f}"],
+        ["Total Transactions", len(rows)],
+    ]
+    for row_data in summary_data:
+        ws1.append(row_data)
+
+    _style_header(ws1, 2)
+    _auto_width(ws1, 2)
+
+    # Tab 2: Filters & Audit
+    ws2 = wb.create_sheet("Filters & Audit")
+    audit_data = [
+        ["Parameter", "Value"],
+        ["Generated At", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+        ["Report Type", "KPI Summary (Explicitly Requested)"],
+        ["Date Range", f"{date_from} — {date_to}"],
+        ["Days of Week", ", ".join(days) if days else "All days"],
+        ["Routes", ", ".join(f"R{r}" for r in route_ids) if route_ids else "All routes"],
+        ["Branches", ", ".join(branches) if branches else "All branches"],
+        ["Customer Filter", ", ".join(customer_ids) if customer_ids else "All customers"],
+    ]
+    for row_data in audit_data:
+        ws2.append(row_data)
+    _style_header(ws2, 2)
+    _auto_width(ws2, 2)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue(), None
+
+
+def validate_report_workbook(
+    wb: Workbook,
+    report_type: str,
+    raw_rows: list[dict],
+    selected_filters: dict,
+    sku_columns: list[str],
+    sku_overridden: bool,
+) -> tuple[bool, str | None]:
+    """
+    Mandatory validation before exporting any Excel report:
+    ✓ Does the Excel contain one row per business record?
+    ✓ Are all selected filters respected?
+    ✓ Are all selected SKUs represented (unless overridden)?
+    ✓ Is the report detailed rather than aggregated?
+
+    If any of these checks fail, returns (False, error_details).
+    """
+    if report_type == "DETAIL":
+        ws = wb.active
+        if not ws:
+            return False, "Validation Error: Workbook has no active sheet."
+
+        # Check 4: Is the report detailed rather than aggregated?
+        headers = [str(cell.value or "").strip() for cell in ws[1]]
+        if headers == ["Metric", "Value"] or ws.title in ["Executive Summary", "KPI Summary"]:
+            return False, "Validation Error: Report was aggregated into a KPI summary dashboard, but a DETAIL report was required."
+        if "Date" not in headers or "Route" not in headers:
+            return False, f"Validation Error: Detail report missing required standard columns. Found: {headers[:5]}"
+
+        # Check 1: Does the Excel contain one row per business record?
+        distinct_records = set()
+        for r in raw_rows:
+            sd = r.get("sale_date")
+            sd_str = sd.isoformat() if isinstance(sd, (date, datetime)) else str(sd or "")[:10]
+            rt = int(r.get("route_number") or 0)
+            cid = str(r.get("customer_id") or "")
+            distinct_records.add((sd_str, rt, cid))
+
+        expected_records = len(distinct_records)
+
+        # Count actual data rows in ws (excluding header row 1 and totals row)
+        data_rows_count = 0
+        for row_idx in range(2, ws.max_row + 1):
+            first_val = str(ws.cell(row=row_idx, column=1).value or "").strip()
+            if first_val == "TOTAL":
+                continue
+            data_rows_count += 1
+
+        if data_rows_count != expected_records:
+            return False, f"Validation Error: Business record count mismatch. Expected {expected_records} rows, got {data_rows_count} rows in Excel."
+
+        # Check 2: Are all selected filters respected?
+        date_from = selected_filters.get("date_from")
+        date_to = selected_filters.get("date_to")
+        if date_from and date_to:
+            iso_from = _parse_date(date_from)
+            iso_to = _parse_date(date_to)
+            for r in raw_rows:
+                sd = str(r.get("sale_date") or "")[:10]
+                if sd < iso_from or sd > iso_to:
+                    return False, f"Validation Error: Record date {sd} is outside requested date range {iso_from} to {iso_to}."
+
+        route_ids = selected_filters.get("route_ids")
+        if route_ids:
+            allowed_routes = set(int(x) for x in route_ids)
+            for r in raw_rows:
+                rt = int(r.get("route_number") or 0)
+                if rt not in allowed_routes:
+                    return False, f"Validation Error: Record route {rt} is outside selected routes {allowed_routes}."
+
+        customer_ids = selected_filters.get("customer_ids")
+        if customer_ids:
+            allowed_customers = set(str(x) for x in customer_ids)
+            for r in raw_rows:
+                cid = str(r.get("customer_id") or "")
+                if cid not in allowed_customers:
+                    return False, f"Validation Error: Record customer {cid} is outside selected customers."
+
+        # Check 3: Are all selected SKUs represented (unless overridden)?
+        if not sku_overridden and sku_columns:
+            headers_lower = {h.lower() for h in headers}
+            for sku in sku_columns:
+                if sku.strip().lower() not in headers_lower:
+                    return False, f"Validation Error: Selected SKU '{sku}' is not represented in the Excel columns."
+
+    elif report_type == "SUMMARY":
+        ws = wb.active
+        headers = [str(cell.value or "").strip() for cell in ws[1]]
+        if headers != ["Metric", "Value"]:
+            return False, "Validation Error: Summary report must follow the Metric | Value layout."
+
+    return True, None
+
+
+def generate_standard_excel(
+    date_from: str,
+    date_to: str,
+    days: list[str] | None,
+    route_ids: list[int] | None,
+    branches: list[str] | None,
+    sku_ids: list[int] | None,
+    customer_ids: list[str] | None,
+    notes: str | None = None,
+) -> tuple[bytes | None, str | None]:
+    """
+    Standard Report Generation Pipeline:
+    1. Read selected filters.
+    2. Determine report type.
+    3. If no report type specified, set reportType = DETAIL.
+    4. Execute database query using ALL selected filters.
+    5. Return raw records.
+    6. Build report columns.
+    7. Apply Description overrides.
+    8. Populate every row.
+    9. Generate Excel & Validate.
+    """
+    # 1. Read filters & 2/3. Determine report type
+    report_type = determine_report_type(notes)
+
+    if report_type == "SUMMARY":
+        return generate_summary_excel(
+            date_from, date_to, days, route_ids, branches, sku_ids, customer_ids, notes
+        )
+
+    # 4. Execute database query using ALL selected filters
+    sql, params = _build_report_query(
+        date_from, date_to, days, route_ids, branches, sku_ids, customer_ids
+    )
+    converted_sql = re.sub(r"\$\d+", "%s", sql)
+    rows = db.query(converted_sql, params)
+
+    # 5. Return raw records
+    if not rows:
+        return None, "No data found for the selected filters."
+
+    fin_sql, fin_params = _build_financial_query(date_from, date_to, route_ids, customer_ids)
+    converted_fin_sql = re.sub(r"\$\d+", "%s", fin_sql)
+    fin_rows = db.query(converted_fin_sql, fin_params)
+
+    # 6. Build report columns & 7. Apply Description overrides
+    overrides = parse_description_overrides(notes)
+
+    selected_sku_names = None
+    if sku_ids:
+        selected_sku_names = get_sku_names_for_ids(sku_ids)
+
+    wb = Workbook()
+    default_empty = wb.active
+
+    standard_spec = {
+        "name": "Sales Data",
+        "sort_order": overrides.get("sort_order", "asc"),
+        "show_totals_row": overrides.get("show_totals_row", True),
+        "freeze_header": True,
+        "auto_size_columns": True,
+        "extra_columns": overrides.get("extra_columns", []),
+        "remove_columns": overrides.get("remove_columns", []),
+        "replace_sku_with": overrides.get("replace_sku_with"),
+        "remove_default_columns": overrides.get("remove_default_columns", []),
+    }
+
+    # 8. Populate every row
+    _build_standard_report_sheet(wb, standard_spec, rows, selected_sku_names=selected_sku_names)
+
+    # Tab 1: Sales Data (Detail) - Active sheet
+    wb.remove(default_empty)
+    wb.active = wb["Sales Data"]
+
+    # Secondary Tab: Financial Summary
+    if fin_rows:
+        ws2 = wb.create_sheet("Financial Summary")
+        fin_headers = ["Date", "Route", "Customer ID", "Customer Name",
+                       "Cash (₹)", "Credit (₹)", "Closing Balance (₹)"]
+        ws2.append(fin_headers)
+        for r in fin_rows:
+            sd = r.get("summary_date")
+            if isinstance(sd, (date, datetime)):
+                sd_disp = sd.strftime("%d-%b-%Y")
+            else:
+                sd_disp = str(sd or "")
+            ws2.append([
+                sd_disp,
+                f"Route {r.get('route_number')}" if r.get('route_number') else "",
+                r.get("customer_id"),
+                r.get("customer_name"),
+                float(r.get("cash") or 0),
+                float(r.get("credit") or 0),
+                float(r.get("closing_balance") or 0),
+            ])
+        _style_header(ws2, len(fin_headers))
+        _auto_width(ws2, len(fin_headers))
+
+    # Secondary Tab: Filters & Audit
+    ws3 = wb.create_sheet("Filters & Audit")
+    audit_data = [
+        ["Parameter", "Value"],
+        ["Generated At", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+        ["Report Type", "DETAIL Report (Standard Dataset Export)"],
+        ["Date Range", f"{date_from} — {date_to}"],
+        ["Days of Week", ", ".join(days) if days else "All days"],
+        ["Routes", ", ".join(f"R{r}" for r in route_ids) if route_ids else "All routes"],
+        ["Branches", ", ".join(branches) if branches else "All branches"],
+        ["Selected SKUs", ", ".join(selected_sku_names) if selected_sku_names else "All matching SKUs"],
+        ["Customer Filter", ", ".join(customer_ids) if customer_ids else "All customers"],
+    ]
+    if notes:
+        audit_data.append(["Description Instructions", notes])
+    for row_data in audit_data:
+        ws3.append(row_data)
+    _style_header(ws3, 2)
+    _auto_width(ws3, 2)
+
+    # 9. Mandatory Pre-Export Validation
+    sku_overridden = bool(standard_spec.get("remove_columns") or standard_spec.get("replace_sku_with"))
+    expected_sku_cols = selected_sku_names if selected_sku_names else sorted({
+        str(r.get("sku_name") or "").strip()
+        for r in rows
+        if r.get("sku_name")
+    })
+
+    is_valid, val_err = validate_report_workbook(
+        wb=wb,
+        report_type="DETAIL",
+        raw_rows=rows,
+        selected_filters={
+            "date_from": date_from,
+            "date_to": date_to,
+            "days": days,
+            "route_ids": route_ids,
+            "branches": branches,
+            "sku_ids": sku_ids,
+            "customer_ids": customer_ids,
+            "selected_sku_names": selected_sku_names,
+        },
+        sku_columns=expected_sku_cols,
+        sku_overridden=sku_overridden,
+    )
+    if not is_valid:
+        return None, val_err
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue(), None
 
 
 # ── main spec-driven entry point ─────────────────────────────────
@@ -981,13 +1564,30 @@ def generate_excel_from_spec(
             "customers": f"{len(req.customer_ids)} selected" if req.customer_ids else "All customers",
         }
 
+    report_type = determine_report_type(req.notes if req and hasattr(req, "notes") else None)
+
     wb = Workbook()
     wb.remove(wb.active)  # discard the auto-created blank sheet
 
     used_names: set[str] = set()
 
-    for ws_spec in spec.get("worksheets") or []:
-        sheet_type = ws_spec.get("type", "tabular")
+    worksheets_spec = list(spec.get("worksheets") or [])
+
+    # If DETAIL report, filter out any KPI summary sheets to prevent aggregate dashboard takeover
+    if report_type == "DETAIL":
+        worksheets_spec = [ws for ws in worksheets_spec if ws.get("type") != "summary"]
+        if not worksheets_spec or not any(ws.get("type") in ("standard", "tabular", "pivot") for ws in worksheets_spec):
+            worksheets_spec.insert(0, {
+                "name": "Sales Data",
+                "type": "standard",
+                "sort_order": "asc",
+                "show_totals_row": True,
+                "freeze_header": True,
+                "auto_size_columns": True,
+            })
+
+    for ws_spec in worksheets_spec:
+        sheet_type = ws_spec.get("type", "standard")
 
         # ── Ensure unique sheet name ──
         raw_name = (ws_spec.get("name") or "Sheet")[:31]
@@ -1002,6 +1602,9 @@ def generate_excel_from_spec(
 
         if sheet_type == "tabular":
             _build_tabular_sheet(wb, ws_spec, rows)
+        elif sheet_type == "standard":
+            sku_names = get_sku_names_for_ids(req.sku_ids) if req and hasattr(req, "sku_ids") and req.sku_ids else None
+            _build_standard_report_sheet(wb, ws_spec, rows, selected_sku_names=sku_names)
         elif sheet_type == "pivot":
             _build_pivot_sheet(wb, ws_spec, rows)
         elif sheet_type == "summary":
@@ -1016,6 +1619,46 @@ def generate_excel_from_spec(
     if not wb.worksheets:
         ws = wb.create_sheet("Report")
         ws.append(["No data available for the selected filters."])
+    else:
+        wb.active = wb.worksheets[0]
+
+    # Pre-export validation
+    if report_type == "DETAIL":
+        expected_sku_cols = (
+            get_sku_names_for_ids(req.sku_ids) if req and hasattr(req, "sku_ids") and req.sku_ids
+            else sorted({str(r.get("sku_name") or "").strip() for r in rows if r.get("sku_name")})
+        )
+        is_valid, val_err = validate_report_workbook(
+            wb=wb,
+            report_type="DETAIL",
+            raw_rows=rows,
+            selected_filters={
+                "date_from": date_from,
+                "date_to": date_to,
+                "days": req.days if req and hasattr(req, "days") else None,
+                "route_ids": req.route_ids if req and hasattr(req, "route_ids") else None,
+                "branches": req.branches if req and hasattr(req, "branches") else None,
+                "sku_ids": req.sku_ids if req and hasattr(req, "sku_ids") else None,
+                "customer_ids": req.customer_ids if req and hasattr(req, "customer_ids") else None,
+            },
+            sku_columns=expected_sku_cols,
+            sku_overridden=any(
+                bool(ws.get("remove_columns") or ws.get("replace_sku_with"))
+                for ws in worksheets_spec if ws.get("type") == "standard"
+            ),
+        )
+        if not is_valid:
+            # Fall back to standard deterministic builder which is guaranteed compliant
+            return generate_standard_excel(
+                date_from=date_from,
+                date_to=date_to,
+                days=req.days if req and hasattr(req, "days") else None,
+                route_ids=req.route_ids if req and hasattr(req, "route_ids") else None,
+                branches=req.branches if req and hasattr(req, "branches") else None,
+                sku_ids=req.sku_ids if req and hasattr(req, "sku_ids") else None,
+                customer_ids=req.customer_ids if req and hasattr(req, "customer_ids") else None,
+                notes=req.notes if req and hasattr(req, "notes") else None,
+            )
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -1240,6 +1883,9 @@ def export_conversation_report(
     _style_header(ws3, 2)
     _auto_width(ws3, 2)
     ws3.views.sheetView[0].showGridLines = True
+
+    # Ensure the detailed data sheet is Tab 1 / active sheet
+    wb.active = ws2
 
     # Write output buffer
     buf = io.BytesIO()

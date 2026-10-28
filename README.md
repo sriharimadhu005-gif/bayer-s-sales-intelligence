@@ -83,20 +83,35 @@ The FastAPI backend will run at **`http://localhost:8000`** (Swagger docs availa
 
 ---
 
-### 2. Frontend Setup
+### 2. Unified Production & Localhost Run (Single URL)
+
+To run the **entire working project** (frontend dashboard + backend APIs) under a single URL without separate servers:
 
 ```powershell
-# Navigate to frontend directory
+# Build frontend static bundle
 cd frontend
+npm run build
+cd ..
 
-# Install dependencies
-npm install
+# Start the unified server (or run .\start.bat)
+cd backend
+.\venv\Scripts\python.exe -m uvicorn app.main:app --port 8000
+```
 
-# Start Vite development server
+The entire working application is now accessible at **`http://localhost:8000`**.
+
+---
+
+### 3. Standalone Frontend Development (Optional)
+
+If developing frontend UI components with Hot Module Replacement (HMR):
+
+```powershell
+cd frontend
 npm run dev
 ```
 
-The application dashboard will be accessible at **`http://localhost:5173`**.
+The Vite dev server will run at **`http://localhost:5173`** and proxy `/api` requests to port 8000.
 
 ---
 

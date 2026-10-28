@@ -1,7 +1,9 @@
 import { useState } from 'react'
+import { MessageSquare, FileSpreadsheet, ShieldCheck } from 'lucide-react'
 import { ChatView } from './components/ChatView'
 import { ReportView } from './components/ReportView'
 import type { ReportPrefill } from './types'
+import bayarsLogo from './assets/bayars-logo.png'
 
 type View = 'chat' | 'report'
 
@@ -17,17 +19,74 @@ export default function App() {
   return (
     <main className="app-shell">
       <aside className="app-sidebar">
-        <div className="brand"><div className="brand-mark">S</div><div><span>SALES</span><strong>Intelligence</strong></div></div>
+        <div className="sidebar-branding">
+          <div className="brand-logo-wrapper">
+            <img
+              src={bayarsLogo}
+              alt="Bayar's Coffee — The Warmth of Goodness!"
+              className="brand-logo-img"
+              width="160"
+              height="79"
+            />
+          </div>
+          <p className="brand-subtitle">Sales Intelligence Portal</p>
+        </div>
+
         <nav aria-label="Primary navigation">
-          <button className={`nav-item ${activeView === 'chat' ? 'active' : ''}`} onClick={() => setActiveView('chat')} type="button"><span className="nav-icon">◌</span>Ask data</button>
-          <button className={`nav-item ${activeView === 'report' ? 'active' : ''}`} onClick={() => setActiveView('report')} type="button"><span className="nav-icon">▤</span>Generate report</button>
+          <button
+            className={`nav-item ${activeView === 'chat' ? 'active' : ''}`}
+            onClick={() => setActiveView('chat')}
+            type="button"
+          >
+            <span className="nav-icon">
+              <MessageSquare size={18} />
+            </span>
+            <span>Ask data</span>
+          </button>
+          <button
+            className={`nav-item ${activeView === 'report' ? 'active' : ''}`}
+            onClick={() => setActiveView('report')}
+            type="button"
+          >
+            <span className="nav-icon">
+              <FileSpreadsheet size={18} />
+            </span>
+            <span>Generate report</span>
+          </button>
         </nav>
-        <div className="sidebar-bottom"><div className="secure-note"><span>⌁</span><p>Private sales workspace<br /><small>Internal access</small></p></div><p className="phase-label">Evaluation build<br />v0.1</p></div>
+
+        <div className="sidebar-footer">
+          <div className="workspace-badge-card">
+            <div className="workspace-badge-icon">
+              <ShieldCheck size={16} />
+            </div>
+            <div className="workspace-badge-info">
+              <span className="workspace-badge-title">Private Workspace</span>
+              <span className="workspace-badge-subtitle">Enterprise Access</span>
+            </div>
+          </div>
+        </div>
       </aside>
+
       <div className="main-area">
-        <div className="topline"><span>SALES ANALYTICS PLATFORM</span><span>Internal workspace</span></div>
-        <div className={activeView === 'chat' ? 'view active' : 'view'}><ChatView onGenerateReport={openReport} /></div>
-        <div className={activeView === 'report' ? 'view active' : 'view'}><ReportView prefill={prefill} onPrefillConsumed={() => setPrefill(null)} /></div>
+        <header className="topline">
+          <div className="topline-brand">
+            <span>Bayar's Coffee</span>
+            <span className="topline-slash">/</span>
+            <span className="topline-section">Analytics & Intelligence</span>
+          </div>
+          <div className="topline-status">
+            <span className="status-dot-active" aria-hidden="true" />
+            <span>Operational</span>
+          </div>
+        </header>
+
+        <div className={activeView === 'chat' ? 'view active' : 'view'}>
+          <ChatView onGenerateReport={openReport} />
+        </div>
+        <div className={activeView === 'report' ? 'view active' : 'view'}>
+          <ReportView prefill={prefill} onPrefillConsumed={() => setPrefill(null)} />
+        </div>
       </div>
     </main>
   )

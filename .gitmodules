@@ -1,0 +1,3 @@
+[submodule "gemini-web2api"]
+	path = gemini-web2api
+	url = https://github.com/Sophomoresty/gemini-web2api.git

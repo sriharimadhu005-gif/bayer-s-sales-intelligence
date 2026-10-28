@@ -70,6 +70,8 @@ class StructuredState:
     last_title: str | None = None                    # Topic or query intent title
     last_columns: list[str] | None = None            # Column names in order
     last_filters: dict[str, Any] | None = None       # Applied filters (dates, routes, etc.)
+    pending_clarification: dict[str, Any] | None = None  # Active entity clarification {original_message, entity_type, candidates, ...}
+    resolved_entities: dict[str, Any] | None = None      # Canonical entities resolved for current/last query
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a dict, omitting None values and omitting raw datasets."""
@@ -207,6 +209,8 @@ def update_structured_state(
     last_title: str | None = ...,
     last_columns: list[str] | None = ...,
     last_filters: dict[str, Any] | None = ...,
+    pending_clarification: dict[str, Any] | None = ...,
+    resolved_entities: dict[str, Any] | None = ...,
 ) -> StructuredState:
     """
     Update specific fields of the structured state. Only fields that are
@@ -244,6 +248,10 @@ def update_structured_state(
         state.last_columns = last_columns
     if last_filters is not sentinel:
         state.last_filters = last_filters
+    if pending_clarification is not sentinel:
+        state.pending_clarification = pending_clarification
+    if resolved_entities is not sentinel:
+        state.resolved_entities = resolved_entities
 
     return state
 
@@ -251,6 +259,21 @@ def update_structured_state(
 def get_structured_state(conv_id: str) -> StructuredState:
     """Retrieve the StructuredState for a conversation."""
     return _get_or_create(conv_id).structured_state
+
+
+def get_pending_clarification(conv_id: str) -> dict[str, Any] | None:
+    """Retrieve any active clarification request for this conversation."""
+    return _get_or_create(conv_id).structured_state.pending_clarification
+
+
+def set_pending_clarification(conv_id: str, clarification: dict[str, Any] | None) -> None:
+    """Set or update the active clarification request for this conversation."""
+    _get_or_create(conv_id).structured_state.pending_clarification = clarification
+
+
+def clear_pending_clarification(conv_id: str) -> None:
+    """Clear any active clarification request for this conversation."""
+    _get_or_create(conv_id).structured_state.pending_clarification = None
 
 
 def get_latest_dataset(conv_id: str) -> tuple[list[dict] | None, list[str] | None, str, dict]:

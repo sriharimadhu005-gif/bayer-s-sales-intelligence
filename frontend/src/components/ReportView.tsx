@@ -1,9 +1,22 @@
 import { FormEvent, useEffect, useState } from 'react'
+import {
+  Calendar,
+  Check,
+  CheckCircle,
+  FileSpreadsheet,
+  FileText,
+  Search,
+  ArrowRight,
+  Info,
+  AlertCircle
+} from 'lucide-react'
 import { api } from '../api/client'
 import type { Branch, Customer, ReportPrefill, ReportRequest, Sku } from '../types'
 
-const allDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-const fixedRoutes = Array.from({ length: 7 }, (_, index) => ({ route_id: index + 1, route_name: `Route ${index + 1}` }))
+const fixedRoutes = Array.from({ length: 7 }, (_, index) => ({
+  route_id: index + 1,
+  route_name: `Route ${index + 1}`
+}))
 const allBranches: Branch[] = ['coffee', 'tea', 'others']
 
 type Notice = { type: 'success' | 'empty' | 'error'; message: string } | null
@@ -25,7 +38,13 @@ function toggleValue<T>(current: T[], value: T, complete: T[]) {
   return next.length ? next : complete
 }
 
-function ChipGroup<T extends string>({ label, options, selected, onChange, disabled = false }: {
+function ChipGroup<T extends string>({
+  label,
+  options,
+  selected,
+  onChange,
+  disabled = false
+}: {
   label: string
   options: T[]
   selected: T[]
@@ -34,16 +53,39 @@ function ChipGroup<T extends string>({ label, options, selected, onChange, disab
 }) {
   return (
     <div className="chip-group" aria-label={label}>
-      {options.map((option) => (
-        <button key={option} type="button" className={`choice-chip ${selected.includes(option) ? 'selected' : ''}`} onClick={() => onChange(toggleValue(selected, option, options))} disabled={disabled}>
-          {option === 'coffee' || option === 'tea' || option === 'others' ? option[0].toUpperCase() + option.slice(1) : option}
-        </button>
-      ))}
+      {options.map((option) => {
+        const isSelected = selected.includes(option)
+        return (
+          <button
+            key={option}
+            type="button"
+            className={`choice-chip ${isSelected ? 'selected' : ''}`}
+            onClick={() => onChange(toggleValue(selected, option, options))}
+            disabled={disabled}
+          >
+            {isSelected && <Check size={14} />}
+            <span>
+              {option === 'coffee' || option === 'tea' || option === 'others'
+                ? option[0].toUpperCase() + option.slice(1)
+                : option}
+            </span>
+          </button>
+        )
+      })}
     </div>
   )
 }
 
-function SearchableChecklist<T extends object, IdType extends string | number = number>({ options, selectedIds, onChange, getId, getLabel, placeholder, isLoading, disabled }: {
+function SearchableChecklist<T extends object, IdType extends string | number = number>({
+  options,
+  selectedIds,
+  onChange,
+  getId,
+  getLabel,
+  placeholder,
+  isLoading,
+  disabled
+}: {
   options: T[]
   selectedIds: IdType[]
   onChange: (ids: IdType[]) => void
@@ -56,30 +98,64 @@ function SearchableChecklist<T extends object, IdType extends string | number = 
   const [query, setQuery] = useState('')
   const visible = options.filter((option) => getLabel(option).toLowerCase().includes(query.toLowerCase()))
   const allSelected = options.length > 0 && options.every((option) => selectedIds.includes(getId(option)))
+
   return (
     <div className="selection-panel">
       <div className="selection-toolbar">
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={placeholder} disabled={disabled || isLoading} aria-label={placeholder} />
-        <button type="button" className="text-button" onClick={() => onChange(allSelected ? [] : options.map(getId))} disabled={disabled || isLoading || !options.length}>
-          {allSelected ? 'Clear' : 'Select all'}
+        <div className="search-input-wrapper">
+          <Search className="search-icon" size={16} />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={placeholder}
+            disabled={disabled || isLoading}
+            aria-label={placeholder}
+          />
+        </div>
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => onChange(allSelected ? [] : options.map(getId))}
+          disabled={disabled || isLoading || !options.length}
+        >
+          {allSelected ? 'Clear all' : 'Select all'}
         </button>
       </div>
       <div className="checklist">
         {isLoading && <span className="select-state">Loading options...</span>}
-        {!isLoading && !visible.length && <span className="select-state">No matching options.</span>}
-        {!isLoading && visible.map((option) => {
-          const id = getId(option)
-          return <label className="check-option" key={id}><input type="checkbox" checked={selectedIds.includes(id)} onChange={() => onChange(selectedIds.includes(id) ? selectedIds.filter((selected) => selected !== id) : [...selectedIds, id])} disabled={disabled} /><span>{getLabel(option)}</span></label>
-        })}
+        {!isLoading && !visible.length && <span className="select-state">No matching options found.</span>}
+        {!isLoading &&
+          visible.map((option) => {
+            const id = getId(option)
+            const isChecked = selectedIds.includes(id)
+            return (
+              <label className="check-option" key={String(id)}>
+                <input
+                  type="checkbox"
+                  checked={isChecked}
+                  onChange={() =>
+                    onChange(isChecked ? selectedIds.filter((selected) => selected !== id) : [...selectedIds, id])
+                  }
+                  disabled={disabled}
+                />
+                <span>{getLabel(option)}</span>
+              </label>
+            )
+          })}
       </div>
     </div>
   )
 }
 
-export function ReportView({ prefill, onPrefillConsumed }: { prefill: ReportPrefill | null; onPrefillConsumed: () => void }) {
+export function ReportView({
+  prefill,
+  onPrefillConsumed
+}: {
+  prefill: ReportPrefill | null
+  onPrefillConsumed: () => void
+}) {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
-  const [days, setDays] = useState(allDays)
   const [routeIds, setRouteIds] = useState(fixedRoutes.map((route) => route.route_id))
   const [branches, setBranches] = useState<Branch[]>(allBranches)
   const [skuIds, setSkuIds] = useState<number[]>([])
@@ -99,18 +175,21 @@ export function ReportView({ prefill, onPrefillConsumed }: { prefill: ReportPref
   const selectedBranches = branches.length ? branches : allBranches
   const dateError = dateFrom && dateTo && dateTo < dateFrom ? 'The end date must be on or after the start date.' : ''
   const isValid = Boolean(dateFrom && dateTo && outputFormat && !dateError)
-  const routesSummary = routeIds.length === fixedRoutes.length ? 'All 7 routes' : `${routeIds.length} route${routeIds.length === 1 ? '' : 's'} selected`
+  const routesSummary =
+    routeIds.length === fixedRoutes.length ? 'All 7 routes' : `${routeIds.length} route${routeIds.length === 1 ? '' : 's'} selected`
   const skuSummary = skuIds.length ? `${skuIds.length} SKU${skuIds.length === 1 ? '' : 's'} selected` : 'All matching SKUs'
-  const customerSummary = customerIds.length ? `${customerIds.length} customer${customerIds.length === 1 ? '' : 's'} selected` : 'All customers in selected routes'
+  const customerSummary =
+    customerIds.length ? `${customerIds.length} customer${customerIds.length === 1 ? '' : 's'} selected` : 'All customers in selected routes'
 
   useEffect(() => {
     let cancelled = false
     async function loadSkus() {
       setLoadingSkus(true)
       try {
-        const result = selectedBranches.length === allBranches.length
-          ? await api.getSkus()
-          : (await Promise.all(selectedBranches.map((branch) => api.getSkus(branch)))).flat()
+        const result =
+          selectedBranches.length === allBranches.length
+            ? await api.getSkus()
+            : (await Promise.all(selectedBranches.map((branch) => api.getSkus(branch)))).flat()
         if (!cancelled) {
           setSkus(result)
           setSkuIds((current) => current.filter((id) => result.some((sku) => sku.sku_id === id)))
@@ -122,7 +201,9 @@ export function ReportView({ prefill, onPrefillConsumed }: { prefill: ReportPref
       }
     }
     void loadSkus()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [branches.join(',')])
 
   useEffect(() => {
@@ -142,14 +223,15 @@ export function ReportView({ prefill, onPrefillConsumed }: { prefill: ReportPref
       }
     }
     void loadCustomers()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [routeIds.join(',')])
 
   useEffect(() => {
     if (!prefill) return
     setDateFrom(toInputDate(prefill.date_from))
     setDateTo(toInputDate(prefill.date_to))
-    setDays(prefill.days?.length ? prefill.days : allDays)
     setRouteIds(prefill.route_ids?.length ? prefill.route_ids : fixedRoutes.map((route) => route.route_id))
     setBranches(prefill.branches?.length ? prefill.branches : allBranches)
     setSkuIds(prefill.sku_ids ?? [])
@@ -158,8 +240,21 @@ export function ReportView({ prefill, onPrefillConsumed }: { prefill: ReportPref
     onPrefillConsumed()
   }, [prefill])
 
-  function changeRoutes(nextIds: number[]) {
-    setRouteIds(nextIds)
+  function toggleRoute(routeId: number) {
+    const next = routeIds.includes(routeId)
+      ? routeIds.filter((id) => id !== routeId)
+      : [...routeIds, routeId]
+    setRouteIds(next)
+    setCustomerIds([])
+  }
+
+  function selectAllRoutes() {
+    setRouteIds(fixedRoutes.map((r) => r.route_id))
+    setCustomerIds([])
+  }
+
+  function clearAllRoutes() {
+    setRouteIds([])
     setCustomerIds([])
   }
 
@@ -184,7 +279,6 @@ export function ReportView({ prefill, onPrefillConsumed }: { prefill: ReportPref
     const payload: ReportRequest = {
       date_from: toIndianDate(dateFrom),
       date_to: toIndianDate(dateTo),
-      ...(days.length === allDays.length ? {} : { days }),
       ...(routeIds.length === fixedRoutes.length ? {} : { route_ids: routeIds }),
       ...(branches.length === allBranches.length ? {} : { branches }),
       ...(skuIds.length ? { sku_ids: skuIds } : {}),
@@ -196,13 +290,17 @@ export function ReportView({ prefill, onPrefillConsumed }: { prefill: ReportPref
     setIsGenerating(true)
     try {
       const result = await api.report(payload)
-      if (result.kind === 'no_data') setNotice({ type: 'empty', message: result.message })
-      else {
+      if (result.kind === 'no_data') {
+        setNotice({ type: 'empty', message: result.message })
+      } else {
         download(result.blob, result.filename)
-        setNotice({ type: 'success', message: `${result.filename} has been generated and downloaded.` })
+        setNotice({ type: 'success', message: `${result.filename} has been generated and downloaded successfully.` })
       }
     } catch (error) {
-      setNotice({ type: 'error', message: error instanceof Error ? error.message : 'Report generation failed. Please try again.' })
+      setNotice({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Report generation failed. Please try again.'
+      })
     } finally {
       setIsGenerating(false)
     }
@@ -216,79 +314,311 @@ export function ReportView({ prefill, onPrefillConsumed }: { prefill: ReportPref
           <h1>Generate a report</h1>
           <p className="workspace-subtitle">Build a reusable sales view and export it in the format you need.</p>
         </div>
-        <div className="dataset-note"><span className="status-dot" />Evaluation dataset <span>As loaded for this phase</span></div>
       </header>
 
       <form className="report-form" onSubmit={submit} noValidate>
         <fieldset disabled={isGenerating}>
-          <div className="form-section date-section">
-            <div className="section-number">01</div>
-            <div className="section-content">
-              <div className="section-title-row"><div><h2>Date range <span className="required">Required</span></h2><p>Both dates are included in the report.</p></div></div>
-              <div className="date-grid">
-                <label>From<input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} aria-invalid={Boolean((hasAttempted && !dateFrom) || dateError)} /></label>
-                <label>To<input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} aria-invalid={Boolean((hasAttempted && !dateTo) || dateError)} /></label>
+          {/* Card 1: Date Range */}
+          <div className="report-step-card">
+            <div className="step-card-header">
+              <div className="step-number-badge">01</div>
+              <div className="step-header-text">
+                <div className="step-title-row">
+                  <h2>
+                    Date range <span className="required-pill">Required</span>
+                  </h2>
+                </div>
+                <p>Select the date range for the report. Both dates are included.</p>
               </div>
-              {(hasAttempted && (!dateFrom || !dateTo)) && <p className="field-error">Select both a start and end date.</p>}
-              {dateError && <p className="field-error">{dateError}</p>}
             </div>
-          </div>
-
-          <div className="form-section">
-            <div className="section-number">02</div>
-            <div className="section-content"><h2>Days of week</h2><p>All days are included by default. Select only the days to filter.</p><ChipGroup label="Days of week" options={allDays} selected={days} onChange={setDays} /></div>
-          </div>
-
-          <div className="form-section">
-            <div className="section-number">03</div>
-            <div className="section-content"><div className="section-title-row"><div><h2>Routes</h2><p>Changing routes refreshes the customer list.</p></div><span className="selection-summary">{routesSummary}</span></div>
-              <SearchableChecklist options={fixedRoutes} selectedIds={routeIds} onChange={changeRoutes} getId={(route) => route.route_id} getLabel={(route) => route.route_name} placeholder="Search routes" />
-            </div>
-          </div>
-
-          <div className="form-section sku-section">
-            <div className="section-number">04</div>
-            <div className="section-content"><div className="section-title-row"><div><h2>Product selection</h2><p>Choose branches first, then optionally refine to individual SKUs.</p></div><span className="selection-summary">{skuSummary}</span></div>
-              <label className="input-label">Branch</label>
-              <ChipGroup label="Product branches" options={allBranches} selected={branches} onChange={setBranches} />
-              <label className="input-label sku-label">SKUs</label>
-              <SearchableChecklist options={skus} selectedIds={skuIds} onChange={setSkuIds} getId={(sku) => sku.sku_id} getLabel={(sku) => sku.sku_name} placeholder="Search matching SKUs" isLoading={loadingSkus} />
-            </div>
-          </div>
-
-          <div className="form-section">
-            <div className="section-number">05</div>
-            <div className="section-content"><div className="section-title-row"><div><h2>Customers</h2><p>Only customers mapped to the selected routes appear here.</p></div><span className="selection-summary">{customerSummary}</span></div>
-              <SearchableChecklist options={customers} selectedIds={customerIds} onChange={setCustomerIds} getId={(customer) => customer.customer_id} getLabel={(customer) => customer.canonical_name} placeholder="Search customers" isLoading={loadingCustomers} />
-            </div>
-          </div>
-
-          <div className="form-section compact-section">
-            <div className="section-number">06</div>
-            <div className="section-content"><div className="toggle-row"><div><h2>Generate chart</h2><p>Include a visual summary in the exported report.</p></div><label className="switch"><input type="checkbox" checked={generateChart} onChange={(event) => setGenerateChart(event.target.checked)} /><span /></label></div>
-              {generateChart && <div className="chart-placeholder"><label>Chart type<select disabled value=""><option>Chart types will be configured by the backend team</option></select></label><p>Chart type selection is reserved for the pending final option set.</p></div>}
-            </div>
-          </div>
-
-          <div className="form-section compact-section">
-            <div className="section-number">07</div>
-            <div className="section-content"><h2>Output format <span className="required">Required</span></h2><p>Select exactly one file format.</p>
-              <div className="format-options" role="radiogroup" aria-label="Output format">
-                <label className={`format-option ${outputFormat === 'excel' ? 'selected' : ''}`}><input type="radio" name="format" value="excel" checked={outputFormat === 'excel'} onChange={() => setOutputFormat('excel')} /><span className="format-icon">X</span><span><strong>Excel</strong><small>Editable workbook</small></span></label>
-                <label className={`format-option ${outputFormat === 'pdf' ? 'selected' : ''}`}><input type="radio" name="format" value="pdf" checked={outputFormat === 'pdf'} onChange={() => setOutputFormat('pdf')} /><span className="format-icon">P</span><span><strong>PDF</strong><small>Formatted document</small></span></label>
+            <div className="date-grid">
+              <div className="date-field-group">
+                <label className="date-field-label" htmlFor="date-from">
+                  <Calendar size={14} />
+                  <span>Start date</span>
+                </label>
+                <div className="date-input-wrapper">
+                  <input
+                    id="date-from"
+                    type="date"
+                    value={dateFrom}
+                    onChange={(event) => setDateFrom(event.target.value)}
+                    aria-invalid={Boolean((hasAttempted && !dateFrom) || dateError)}
+                  />
+                </div>
               </div>
-              {hasAttempted && !outputFormat && <p className="field-error">Choose Excel or PDF before generating.</p>}
+              <div className="date-field-group">
+                <label className="date-field-label" htmlFor="date-to">
+                  <Calendar size={14} />
+                  <span>End date</span>
+                </label>
+                <div className="date-input-wrapper">
+                  <input
+                    id="date-to"
+                    type="date"
+                    value={dateTo}
+                    onChange={(event) => setDateTo(event.target.value)}
+                    aria-invalid={Boolean((hasAttempted && !dateTo) || dateError)}
+                  />
+                </div>
+              </div>
+            </div>
+            {hasAttempted && (!dateFrom || !dateTo) && (
+              <p className="field-error-msg">Please select both a start and end date.</p>
+            )}
+            {dateError && <p className="field-error-msg">{dateError}</p>}
+          </div>
+
+          {/* Card 2: Routes (Modern Selectable Cards / Filter Chips) */}
+          <div className="report-step-card">
+            <div className="step-card-header">
+              <div className="step-number-badge">02</div>
+              <div className="step-header-text">
+                <div className="step-title-row">
+                  <h2>Routes</h2>
+                  <span className="selection-summary-badge">{routesSummary}</span>
+                </div>
+                <p>Selecting routes updates the available customers below.</p>
+              </div>
+            </div>
+            <div className="routes-toolbar">
+              <button
+                type="button"
+                className="text-button"
+                onClick={routeIds.length === fixedRoutes.length ? clearAllRoutes : selectAllRoutes}
+              >
+                {routeIds.length === fixedRoutes.length ? 'Clear all' : 'Select all'}
+              </button>
+            </div>
+            <div className="routes-grid" role="group" aria-label="Route selection">
+              {fixedRoutes.map((route) => {
+                const isSelected = routeIds.includes(route.route_id)
+                return (
+                  <div
+                    key={route.route_id}
+                    className={`route-card-item ${isSelected ? 'selected' : ''}`}
+                    onClick={() => toggleRoute(route.route_id)}
+                    role="checkbox"
+                    aria-checked={isSelected}
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === ' ' || e.key === 'Enter') {
+                        e.preventDefault()
+                        toggleRoute(route.route_id)
+                      }
+                    }}
+                  >
+                    <div className="route-check-box">
+                      {isSelected && <Check size={12} />}
+                    </div>
+                    <span>{route.route_name}</span>
+                  </div>
+                )
+              })}
             </div>
           </div>
 
-          <div className="form-section notes-section">
-            <div className="section-number">08</div>
-            <div className="section-content"><h2>Description / notes</h2><p>Optional instructions are passed to the report engine as-is.</p><textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Any specific instructions for this report (e.g. exclude returns, highlight top 5 customers)..." rows={4} /></div>
+          {/* Card 3: Customers */}
+          <div className="report-step-card">
+            <div className="step-card-header">
+              <div className="step-number-badge">03</div>
+              <div className="step-header-text">
+                <div className="step-title-row">
+                  <h2>Customers</h2>
+                  <span className="selection-summary-badge">{customerSummary}</span>
+                </div>
+                <p>Only customers serviced on the selected routes appear here.</p>
+              </div>
+            </div>
+            <SearchableChecklist
+              options={customers}
+              selectedIds={customerIds}
+              onChange={setCustomerIds}
+              getId={(customer) => customer.customer_id}
+              getLabel={(customer) => customer.canonical_name}
+              placeholder="Search customers by name..."
+              isLoading={loadingCustomers}
+            />
+          </div>
+
+          {/* Card 4: Product Selection */}
+          <div className="report-step-card">
+            <div className="step-card-header">
+              <div className="step-number-badge">04</div>
+              <div className="step-header-text">
+                <div className="step-title-row">
+                  <h2>Product selection</h2>
+                  <span className="selection-summary-badge">{skuSummary}</span>
+                </div>
+                <p>Choose product branches first, then optionally refine to specific SKUs.</p>
+              </div>
+            </div>
+            <label className="sub-label">Branches</label>
+            <ChipGroup
+              label="Product branches"
+              options={allBranches}
+              selected={branches}
+              onChange={setBranches}
+            />
+            <label className="sub-label">SKUs</label>
+            <SearchableChecklist
+              options={skus}
+              selectedIds={skuIds}
+              onChange={setSkuIds}
+              getId={(sku) => sku.sku_id}
+              getLabel={(sku) => sku.sku_name}
+              placeholder="Search SKUs by name..."
+              isLoading={loadingSkus}
+            />
+          </div>
+
+          {/* Card 5: Visual Summary / Chart */}
+          <div className="report-step-card">
+            <div className="step-card-header">
+              <div className="step-number-badge">05</div>
+              <div className="step-header-text">
+                <div className="toggle-row">
+                  <div>
+                    <h2>Generate chart</h2>
+                    <p>Include visual summary charts in the exported report.</p>
+                  </div>
+                  <label className="switch" aria-label="Toggle generate chart">
+                    <input
+                      type="checkbox"
+                      checked={generateChart}
+                      onChange={(event) => setGenerateChart(event.target.checked)}
+                    />
+                    <span />
+                  </label>
+                </div>
+              </div>
+            </div>
+            {generateChart && (
+              <div className="chart-placeholder-box">
+                <p>Automatic sales volume & revenue charts will be embedded into the report.</p>
+              </div>
+            )}
+          </div>
+
+          {/* Card 6: Output Format */}
+          <div className="report-step-card">
+            <div className="step-card-header">
+              <div className="step-number-badge">06</div>
+              <div className="step-header-text">
+                <h2>
+                  Output format <span className="required-pill">Required</span>
+                </h2>
+                <p>Select the preferred file format for export.</p>
+              </div>
+            </div>
+            <div className="format-options-grid" role="radiogroup" aria-label="Output format">
+              <label
+                className={`format-card ${outputFormat === 'excel' ? 'selected' : ''}`}
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === ' ' || e.key === 'Enter') {
+                    e.preventDefault()
+                    setOutputFormat('excel')
+                  }
+                }}
+              >
+                <input
+                  type="radio"
+                  name="format"
+                  value="excel"
+                  checked={outputFormat === 'excel'}
+                  onChange={() => setOutputFormat('excel')}
+                />
+                <div className="format-icon-badge format-icon-excel">
+                  <FileSpreadsheet size={22} />
+                </div>
+                <div>
+                  <strong>Excel (.xlsx)</strong>
+                  <small>Full analysis workbook</small>
+                </div>
+              </label>
+              <label
+                className={`format-card ${outputFormat === 'pdf' ? 'selected' : ''}`}
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === ' ' || e.key === 'Enter') {
+                    e.preventDefault()
+                    setOutputFormat('pdf')
+                  }
+                }}
+              >
+                <input
+                  type="radio"
+                  name="format"
+                  value="pdf"
+                  checked={outputFormat === 'pdf'}
+                  onChange={() => setOutputFormat('pdf')}
+                />
+                <div className="format-icon-badge format-icon-pdf">
+                  <FileText size={22} />
+                </div>
+                <div>
+                  <strong>PDF (.pdf)</strong>
+                  <small>Executive formatted document</small>
+                </div>
+              </label>
+            </div>
+            {hasAttempted && !outputFormat && (
+              <p className="field-error-msg">Please select either Excel or PDF before generating.</p>
+            )}
+          </div>
+
+          {/* Card 7: Description / Notes */}
+          <div className="report-step-card">
+            <div className="step-card-header">
+              <div className="step-number-badge">07</div>
+              <div className="step-header-text">
+                <h2>Description / special notes</h2>
+                <p>Optional instructions are passed to the report generation engine.</p>
+              </div>
+            </div>
+            <textarea
+              className="notes-textarea"
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+              placeholder="Any specific instructions for this report (e.g. exclude returns, highlight top 5 customers)..."
+              rows={4}
+            />
           </div>
         </fieldset>
 
-        {notice && <div className={`report-notice ${notice.type}`} role="status"><span>{notice.type === 'success' ? '✓' : notice.type === 'empty' ? 'i' : '!'}</span>{notice.message}{notice.type === 'error' && <button type="button" onClick={() => setNotice(null)}>Dismiss</button>}</div>}
-        <div className="report-action"><p>Required fields must be complete before generating.</p><button className="primary-button" type="submit" disabled={isGenerating || !isValid}>{isGenerating ? <><span className="button-spinner" />Generating...</> : <>Generate report <span aria-hidden="true">→</span></>}</button></div>
+        {/* Notices */}
+        {notice && (
+          <div className={`report-notice ${notice.type}`} role="status">
+            {notice.type === 'success' && <CheckCircle size={18} />}
+            {notice.type === 'empty' && <Info size={18} />}
+            {notice.type === 'error' && <AlertCircle size={18} />}
+            <span>{notice.message}</span>
+            {notice.type === 'error' && (
+              <button type="button" className="notice-dismiss-btn" onClick={() => setNotice(null)}>
+                Dismiss
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Bottom Action Card */}
+        <div className="report-action-card">
+          <p>Complete required fields (Date range & Format) to generate your report.</p>
+          <button className="primary-button" type="submit" disabled={isGenerating || !isValid}>
+            {isGenerating ? (
+              <>
+                <span className="button-spinner" />
+                <span>Generating report...</span>
+              </>
+            ) : (
+              <>
+                <span>Generate report</span>
+                <ArrowRight size={16} />
+              </>
+            )}
+          </button>
+        </div>
       </form>
     </section>
   )

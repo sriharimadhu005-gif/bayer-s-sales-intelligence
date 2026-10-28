@@ -74,11 +74,36 @@ language instruction and available data context.
   closing_balance   - float
 
 ## AVAILABLE SHEET TYPES
-  "tabular"   - Flat table. Use for most instructions.
-  "pivot"     - Cross-tab. Use when user says pivot, rows vs columns, SKU in columns, etc.
-  "summary"   - KPI metrics panel. Useful as a first sheet.
-  "financial" - Renders financial rows (cash, credit, balances).
-  "audit"     - Auto-generated filters/audit sheet. Always add this as the LAST sheet.
+
+### "standard" (DEFAULT — use this unless the user explicitly requests a different layout)
+  The Standard Report Format.  One row per (date, route, customer) with each
+  selected SKU as its own column.
+  Default columns:  S.No | Date | Route | Customer ID | Customer Name | [SKU-A] | [SKU-B] | ...
+  Default sort:     sale_date ASC → route_number ASC → customer_name ASC
+
+  Override fields (applied via user Description instructions):
+    "remove_columns": ["sku_columns"]           — remove all per-SKU columns
+    "replace_sku_with": "total_qty"              — replace SKU cols with one aggregate column
+    "remove_default_columns": ["customer_name"]  — remove specific default columns
+    "extra_columns": ["outstanding_due"]          — append additional columns
+    "sort_order": "desc"                          — reverse the sort
+    "show_totals_row": false                      — suppress the totals row
+
+### "tabular" — Flat table with one row per sale line.
+  Use when the user explicitly requests a flat / non-pivoted layout.
+  columns[] must only contain valid field names from the sales rows section.
+
+### "pivot" — Cross-tab.
+  Use when user says "pivot", "rows vs columns", "SKU in columns", etc.
+  pivot_rows, pivot_columns, pivot_values, pivot_aggfunc.
+
+### "summary" — KPI metrics panel (Metric | Value).
+  CRITICAL: ONLY use when the user EXPLICITLY requests a summary report (e.g. "Create a summary", "Executive report", "KPI report", "Management dashboard").
+  NEVER include a summary sheet for a detail report. All reports are DETAIL reports by default.
+
+### "financial" — Renders financial rows (cash, credit, balances).
+
+### "audit" — Auto-generated filters/audit sheet. Always add this as the LAST sheet.
 
 ## JSON SPEC FORMAT
 Return ONLY a valid JSON object (no markdown, no explanation, no code fences):
@@ -86,22 +111,45 @@ Return ONLY a valid JSON object (no markdown, no explanation, no code fences):
 {
   "worksheets": [
     {
-      "name": "<max 31 chars, unique>",
-      "type": "tabular",
-      "columns": ["sale_date","route_number","customer_id","customer_name",
-                  "sku_name","qty_kg","category","approved_inclusive","estimated_revenue"],
-      "filter_route": null,
-      "sort_by": "estimated_revenue",
-      "sort_order": "desc",
-      "top_n": null,
-      "highlight_top_n": null,
+      "name": "Sales Data",
+      "type": "standard",
+      "sort_order": "asc",
       "show_totals_row": true,
       "freeze_header": true,
-      "auto_size_columns": true,
-      "conditional_formats": [],
-      "charts": []
+      "auto_size_columns": true
     }
   ]
+}
+
+Standard sheet with overrides example (user said "don't need SKU columns, show Total Quantity"):
+{
+  "name": "Sales Data",
+  "type": "standard",
+  "remove_columns": ["sku_columns"],
+  "replace_sku_with": "total_qty",
+  "show_totals_row": true,
+  "freeze_header": true,
+  "auto_size_columns": true
+}
+
+Standard sheet with extra columns example (user said "include Outstanding Due"):
+{
+  "name": "Sales Data",
+  "type": "standard",
+  "extra_columns": ["outstanding_due"],
+  "show_totals_row": true,
+  "freeze_header": true,
+  "auto_size_columns": true
+}
+
+Standard sheet with removed default columns (user said "Customer Name is not required"):
+{
+  "name": "Sales Data",
+  "type": "standard",
+  "remove_default_columns": ["customer_name"],
+  "show_totals_row": true,
+  "freeze_header": true,
+  "auto_size_columns": true
 }
 
 Pivot sheet example:
@@ -117,6 +165,24 @@ Pivot sheet example:
   "highlight_top_n": null,
   "show_row_totals": true,
   "show_col_totals": true,
+  "freeze_header": true,
+  "auto_size_columns": true,
+  "conditional_formats": [],
+  "charts": []
+}
+
+Tabular sheet example (flat, non-pivoted):
+{
+  "name": "Detailed Sales",
+  "type": "tabular",
+  "columns": ["sale_date","route_number","customer_id","customer_name",
+              "sku_name","qty_kg","category","approved_inclusive","estimated_revenue"],
+  "filter_route": null,
+  "sort_by": "estimated_revenue",
+  "sort_order": "desc",
+  "top_n": null,
+  "highlight_top_n": null,
+  "show_totals_row": true,
   "freeze_header": true,
   "auto_size_columns": true,
   "conditional_formats": [],
@@ -161,17 +227,28 @@ Conditional format object (inside "conditional_formats" array):
 }
 Rule: "top_n" | "above_avg"
 
+## LAYOUT PRIORITY (MANDATORY)
+
+When designing the report, apply this priority order:
+  1. User instructions in the Description field (HIGHEST)
+  2. User-selected report filters (routes, SKUs, branches, customers)
+  3. Standard Report Format defaults (LOWEST)
+
+ALWAYS start from the Standard Report Format (type="standard") and then
+apply the user's modifications on top.  Only use type="tabular" or type="pivot"
+if the user explicitly requests a flat table, pivot table, or cross-tab layout.
+
 ## DESIGN RULES
 1. Sheet names must be <= 31 chars and unique across the workbook.
-2. "One sheet per route" means 7 tabular sheets, filter_route = 1 through 7.
+2. "One sheet per route" means 7 standard sheets, each with a name like "Route 1".
 3. "Pivot / SKU in columns" means type = "pivot" with appropriate fields.
 4. "Highlight top N" means use highlight_top_n or conditional_formats.
-5. columns[] must only contain valid field names listed in the sales rows section above.
-6. Financial data (cash, credit, balance) requires type = "financial".
-7. Always include freeze_header: true and auto_size_columns: true unless told otherwise.
-8. Always append {"name":"Filters & Audit","type":"audit","freeze_header":false,"auto_size_columns":true} as the LAST worksheet.
-9. DO NOT include the user instruction text anywhere in the spec.
-10. Output ONLY the JSON object. Nothing else.
+5. Financial data (cash, credit, balance) requires type = "financial".
+6. Always include freeze_header: true and auto_size_columns: true unless told otherwise.
+7. Always append {"name":"Filters & Audit","type":"audit","freeze_header":false,"auto_size_columns":true} as the LAST worksheet.
+8. DO NOT include the user instruction text anywhere in the spec.
+9. Output ONLY the JSON object. Nothing else.
+10. Every row in every sheet must have identical columns — never change columns mid-sheet.
 """
 
 
@@ -179,44 +256,19 @@ Rule: "top_n" | "above_avg"
 
 def _default_spec() -> dict:
     """
-    Return the standard 4-tab report spec used when no instruction is given
-    or when the LLM call fails.
+    Return the standard report spec used when no instruction is given
+    or when the LLM call fails. Uses the Standard Report Format
+    (type="standard") as the primary data sheet.
     """
     return {
         "worksheets": [
             {
-                "name": "Executive Summary",
-                "type": "summary",
-                "metrics": [
-                    {"label": "Total Volume (KG)",     "value_key": "total_qty"},
-                    {"label": "Estimated Revenue (Rs)", "value_key": "total_rev"},
-                    {"label": "Active Customers",       "value_key": "unique_customers"},
-                    {"label": "Unique SKUs",             "value_key": "unique_skus"},
-                    {"label": "Routes Covered",          "value_key": "routes_covered"},
-                    {"label": "Total Cash (Rs)",          "value_key": "total_cash"},
-                    {"label": "Total Credit (Rs)",        "value_key": "total_credit"},
-                    {"label": "Total Transactions",      "value_key": "total_transactions"},
-                ],
-                "freeze_header": False,
-                "auto_size_columns": True,
-            },
-            {
-                "name": "Sales Breakdown",
-                "type": "tabular",
-                "columns": [
-                    "sale_date", "route_number", "customer_id", "customer_name",
-                    "sku_name", "qty_kg", "category", "approved_inclusive", "estimated_revenue",
-                ],
-                "filter_route": None,
-                "sort_by": "sale_date",
+                "name": "Sales Data",
+                "type": "standard",
                 "sort_order": "asc",
-                "top_n": None,
-                "highlight_top_n": None,
-                "show_totals_row": False,
+                "show_totals_row": True,
                 "freeze_header": True,
                 "auto_size_columns": True,
-                "conditional_formats": [],
-                "charts": [],
             },
             {
                 "name": "Financial Summary",
@@ -249,7 +301,7 @@ async def _call_openrouter(messages: list[dict]) -> str:
         "temperature": 0.1,
         "max_tokens": 4096,
     }
-    async with httpx.AsyncClient(timeout=90.0) as client:
+    async with httpx.AsyncClient(timeout=20.0) as client:
         resp = await client.post(
             f"{OPENROUTER_BASE_URL}/chat/completions",
             headers=headers,

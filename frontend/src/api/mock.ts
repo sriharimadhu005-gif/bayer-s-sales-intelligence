@@ -34,7 +34,29 @@ export async function mockChat(message: string, conversationId: string | null): 
   await wait(780)
   if (/unreachable|connection error/i.test(message)) throw new TypeError('Failed to fetch')
   if (/nothing|unknown|no data/i.test(message)) {
-    return { conversation_id: conversationId ?? crypto.randomUUID(), answer_text: "I couldn't find data for that. Try narrowing the date range or checking the product name.", table: null, chart: null, report_eligible: false, report_prefill: null }
+    return { conversation_id: conversationId ?? crypto.randomUUID(), answer_text: "I couldn't find data for that. Try narrowing the date range or checking the product name.", table: null, chart: null, report_eligible: false, report_prefill: null, clarification: null }
+  }
+  if (/\b(bs|shanthi|clarify|options)\b/i.test(message)) {
+    return {
+      conversation_id: conversationId ?? crypto.randomUUID(),
+      answer_text: "I found multiple variants for 'BS'. Which one did you mean?",
+      table: null,
+      chart: null,
+      report_eligible: false,
+      report_prefill: null,
+      excel_download_url: null,
+      excel_filename: null,
+      clarification: {
+        question: "Which variant of 'BS' did you mean?",
+        entity_type: 'sku',
+        prompt_hint: 'Select a pack size or variant:',
+        options: [
+          { id: 1, label: 'Coffee-Cafe Supreme-200', value: '1', badge: 'Rs.730.00/kg', detail: 'Std Rate: Rs.730.00/kg' },
+          { id: 2, label: 'Coffee-Cafe Supreme-500', value: '2', badge: 'Rs.725.00/kg', detail: 'Std Rate: Rs.725.00/kg' },
+          { id: 3, label: 'Coffee-Cafe Supreme-1000', value: '3', badge: 'Rs.720.00/kg', detail: 'Std Rate: Rs.720.00/kg' },
+        ],
+      },
+    }
   }
   if (/generate report|export to excel|download report|create excel|convert this into excel|give this as xlsx|excel|xlsx/i.test(message)) {
     return {
@@ -55,7 +77,7 @@ export async function mockChat(message: string, conversationId: string | null): 
     table: { columns: ['Route', 'Coffee volume', 'Share'], rows: [['Route 3', '1,240', '31%'], ['Route 1', '1,051', '26%'], ['Route 5', '842', '21%']] },
     chart: asksForChart ? { type: 'bar', data: { labels: ['Route 3', 'Route 1', 'Route 5'], values: [1240, 1051, 842] } } : null,
     report_eligible: true,
-    report_prefill: { date_from: '10/08/2026', date_to: '16/08/2026', days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], route_ids: [3], branches: ['coffee'], sku_ids: null, customer_ids: null },
+    report_prefill: { date_from: '10/08/2026', date_to: '16/08/2026', route_ids: [3], branches: ['coffee'], sku_ids: null, customer_ids: null },
     excel_download_url: null,
     excel_filename: null,
   }
